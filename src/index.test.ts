@@ -238,6 +238,37 @@ describe("pi-posture internals", () => {
     expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
   });
 
+  it("falls back to rendered context filtering when duplicate rendered paths diverge from metadata", () => {
+    const globalPath = `${getAgentDir()}/AGENTS.md`;
+    const projectPath = "/repo/AGENTS.md";
+    const missingPath = "/repo/missing/AGENTS.md";
+    const prompt = `<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext(globalPath, "global")}${projectContext(projectPath, "project-one")}${projectContext(projectPath, "project-two")}</project_context>\nBASE`;
+
+    const filtered = __testing.addPromptOverlay(
+      prompt,
+      {
+        id: "quiet",
+        label: "Quiet",
+        description: "Quiet",
+        promptOverlay: "overlay",
+        contextPolicy: { global: "suppress", project: "inherit" },
+      },
+      {
+        cwd: "/repo",
+        contextFiles: [
+          { path: globalPath, content: "global" },
+          { path: projectPath, content: "project" },
+          { path: missingPath, content: "missing" },
+        ],
+      },
+    );
+
+    expect(filtered).not.toContain(projectContext(globalPath, "global"));
+    expect(filtered).toContain(projectContext(projectPath, "project-one"));
+    expect(filtered).toContain(projectContext(projectPath, "project-two"));
+    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath, projectPath], suppressed: [globalPath] });
+  });
+
   it("passes systemPromptOptions contextFiles through before_agent_start", async () => {
     const firstProjectPath = join(cwd, "first/AGENTS.md");
     const secondProjectPath = join(cwd, "second/AGENTS.md");
