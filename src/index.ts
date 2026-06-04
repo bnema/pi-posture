@@ -1,4 +1,4 @@
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -500,40 +500,73 @@ function shouldSuppressContext(filePath: string, policy: ContextPolicy): boolean
   return global ? policy.global === "suppress" : policy.project === "suppress";
 }
 
-function filterRenderedProjectContextBody(body: string, policy: ContextPolicy): string {
-  state.contextFilterReport = { kept: [], suppressed: [] };
-  return body.replace(
-    /<project_instructions path="([^"]+)">\n[\s\S]*?\n<\/project_instructions>\n*/g,
-    (entry: string, filePath: string) => {
-      if (shouldSuppressContext(filePath, policy)) {
-        state.contextFilterReport?.suppressed.push(filePath);
-        return "";
-      }
-      state.contextFilterReport?.kept.push(filePath);
-      return entry.endsWith("\n\n") ? entry : `${entry.trimEnd()}\n\n`;
-    },
-  );
+const PROJECT_INSTRUCTIONS_PATTERN = /<project_instructions path="([^"]+)">\n[\s\S]*?\n<\/project_instructions>\n*/g;
+const PROJECT_CONTEXT_PATTERN = /<project_context>([\s\S]*?)<\/project_context>\n?/;
+
+type ContextFile = NonNullable<BuildSystemPromptOptions["contextFiles"]>[number];
+
+function sameStringArraySet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
-function filterProjectContext(systemPrompt: string, policy: ContextPolicy | undefined): string {
+function renderedContextPaths(body: string): string[] {
+  return Array.from(body.matchAll(PROJECT_INSTRUCTIONS_PATTERN), (match) => match[1]);
+}
+
+function contextFileOrder(body: string, contextFiles?: ContextFile[]): string[] | undefined {
+  if (!contextFiles || contextFiles.length === 0) return undefined;
+  const renderedPaths = renderedContextPaths(body);
+  const metadataPaths = contextFiles.map((file) => file.path);
+  return sameStringArraySet(renderedPaths, metadataPaths) ? metadataPaths : undefined;
+}
+
+function filterRenderedProjectContextBody(body: string, policy: ContextPolicy, contextFiles?: ContextFile[]): string {
+  state.contextFilterReport = { kept: [], suppressed: [] };
+  const reportOrder = contextFileOrder(body, contextFiles);
+
+  const filteredBody = body.replace(PROJECT_INSTRUCTIONS_PATTERN, (entry: string, filePath: string) => {
+    if (shouldSuppressContext(filePath, policy)) {
+      state.contextFilterReport?.suppressed.push(filePath);
+      return "";
+    }
+
+    const normalizedEntry = entry.endsWith("\n\n") ? entry : `${entry.trimEnd()}\n\n`;
+    state.contextFilterReport?.kept.push(filePath);
+    return normalizedEntry;
+  });
+
+  if (!reportOrder) return filteredBody;
+
+  state.contextFilterReport = { kept: [], suppressed: [] };
+  for (const filePath of reportOrder) {
+    if (shouldSuppressContext(filePath, policy)) state.contextFilterReport.suppressed.push(filePath);
+    else state.contextFilterReport.kept.push(filePath);
+  }
+
+  return filteredBody;
+}
+
+function filterProjectContext(systemPrompt: string, policy: ContextPolicy | undefined, options?: BuildSystemPromptOptions): string {
   state.contextFilterReport = undefined;
   if (!policy || (policy.global !== "suppress" && policy.project !== "suppress")) return systemPrompt;
 
-  const projectContextPattern = /<project_context>([\s\S]*?)<\/project_context>\n?/;
-  if (!projectContextPattern.test(systemPrompt)) {
+  if (!PROJECT_CONTEXT_PATTERN.test(systemPrompt)) {
     addConfigError("contextPolicy: current system prompt has no project_context block; suppression skipped");
     return systemPrompt;
   }
 
-  return systemPrompt.replace(projectContextPattern, (_full, body: string) => {
-    const filteredBody = filterRenderedProjectContextBody(body, policy);
+  return systemPrompt.replace(PROJECT_CONTEXT_PATTERN, (_full, body: string) => {
+    const filteredBody = filterRenderedProjectContextBody(body, policy, options?.contextFiles);
     if (!filteredBody.includes("<project_instructions")) return "";
     return `<project_context>${filteredBody}</project_context>\n`;
   });
 }
 
-function addPromptOverlay(systemPrompt: string, posture: Posture): string {
-  const filtered = filterProjectContext(systemPrompt, posture.contextPolicy);
+function addPromptOverlay(systemPrompt: string, posture: Posture, options?: BuildSystemPromptOptions): string {
+  const filtered = filterProjectContext(systemPrompt, posture.contextPolicy, options);
   if (!posture.promptOverlay) return filtered;
   return `${filtered}\n\n<pi_posture id="${posture.id}">\n${posture.promptOverlay}\n</pi_posture>`;
 }
@@ -704,7 +737,7 @@ export default function piPosture(pi: ExtensionAPI) {
     setStatus(ctx);
     const posture = activePosture();
     if (posture.id === "default") return;
-    return { systemPrompt: addPromptOverlay(event.systemPrompt, posture) };
+    return { systemPrompt: addPromptOverlay(event.systemPrompt, posture, event.systemPromptOptions) };
   });
 
   pi.on("session_shutdown", () => {
