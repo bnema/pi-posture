@@ -80,8 +80,10 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
     appended,
     selectCalls,
     run: (args: string) => commandHandler!(args, ctx),
-    emit: async (event: string, payload: any) => {
-      for (const handler of handlers.get(event) ?? []) await handler(payload, ctx);
+    emit: async (event: string, payload: any): Promise<any[]> => {
+      const results: any[] = [];
+      for (const handler of handlers.get(event) ?? []) results.push(await handler(payload, ctx));
+      return results;
     },
   };
 }
@@ -150,6 +152,124 @@ describe("pi-posture internals", () => {
     const noContext = __testing.filterProjectContext("NO_CONTEXT", { global: "suppress", project: "suppress" });
     expect(noContext).toBe("NO_CONTEXT");
     expect(noContext).not.toContain("<project_context>");
+  });
+
+  it("filters rendered context using structured context file metadata", () => {
+    const globalPath = `${getAgentDir()}/AGENTS.md`;
+    const projectPath = "/repo/[special]/AGENTS.md";
+    const prompt = `<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext(globalPath, "global")}${projectContext(projectPath, "project")}</project_context>\nBASE`;
+
+    const filtered = __testing.addPromptOverlay(
+      prompt,
+      {
+        id: "quiet",
+        label: "Quiet",
+        description: "Quiet",
+        promptOverlay: "overlay",
+        contextPolicy: { global: "suppress", project: "inherit" },
+      },
+      {
+        cwd: "/repo",
+        contextFiles: [
+          { path: globalPath, content: "global" },
+          { path: projectPath, content: "project" },
+        ],
+      },
+    );
+
+    expect(filtered).not.toContain(projectContext(globalPath, "global"));
+    expect(filtered).toContain(projectContext(projectPath, "project"));
+    expect(filtered).toContain('<pi_posture id="quiet">');
+    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
+  });
+
+  it("falls back to rendered context filtering when structured metadata contains paths missing from the prompt", () => {
+    const globalPath = `${getAgentDir()}/AGENTS.md`;
+    const projectPath = "/repo/AGENTS.md";
+    const missingPath = "/repo/missing/AGENTS.md";
+    const prompt = `<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext(globalPath, "global")}${projectContext(projectPath, "project")}</project_context>\nBASE`;
+
+    const filtered = __testing.addPromptOverlay(
+      prompt,
+      {
+        id: "quiet",
+        label: "Quiet",
+        description: "Quiet",
+        promptOverlay: "overlay",
+        contextPolicy: { global: "suppress", project: "inherit" },
+      },
+      {
+        cwd: "/repo",
+        contextFiles: [
+          { path: globalPath, content: "global" },
+          { path: projectPath, content: "project" },
+          { path: missingPath, content: "missing" },
+        ],
+      },
+    );
+
+    expect(filtered).not.toContain(projectContext(globalPath, "global"));
+    expect(filtered).toContain(projectContext(projectPath, "project"));
+    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
+  });
+
+  it("falls back to rendered context filtering when the prompt contains context missing from structured metadata", () => {
+    const globalPath = `${getAgentDir()}/AGENTS.md`;
+    const projectPath = "/repo/AGENTS.md";
+    const prompt = `<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext(globalPath, "global")}${projectContext(projectPath, "project")}</project_context>\nBASE`;
+
+    const filtered = __testing.addPromptOverlay(
+      prompt,
+      {
+        id: "quiet",
+        label: "Quiet",
+        description: "Quiet",
+        promptOverlay: "overlay",
+        contextPolicy: { global: "suppress", project: "inherit" },
+      },
+      {
+        cwd: "/repo",
+        contextFiles: [{ path: projectPath, content: "project" }],
+      },
+    );
+
+    expect(filtered).not.toContain(projectContext(globalPath, "global"));
+    expect(filtered).toContain(projectContext(projectPath, "project"));
+    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
+  });
+
+  it("passes systemPromptOptions contextFiles through before_agent_start", async () => {
+    const firstProjectPath = join(cwd, "first/AGENTS.md");
+    const secondProjectPath = join(cwd, "second/AGENTS.md");
+    writeProjectConfig(cwd, {
+      postures: {
+        quiet: {
+          description: "Quiet",
+          promptOverlay: "overlay",
+          contextPolicy: { project: "suppress" },
+        },
+      },
+    });
+    const harness = fakeExtension(cwd);
+    await harness.emit("session_start", { reason: "startup" });
+    await harness.run("quiet");
+
+    const prompt = `<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext(firstProjectPath, "first")}${projectContext(secondProjectPath, "second")}</project_context>\nBASE`;
+    const results = await harness.emit("before_agent_start", {
+      systemPrompt: prompt,
+      systemPromptOptions: {
+        cwd,
+        contextFiles: [
+          { path: secondProjectPath, content: "second" },
+          { path: firstProjectPath, content: "first" },
+        ],
+      },
+    });
+
+    const result = results.find((entry): entry is { systemPrompt: string } => Boolean(entry && "systemPrompt" in entry));
+    expect(result?.systemPrompt).not.toContain("<project_context>");
+    expect(result?.systemPrompt).toContain('<pi_posture id="quiet">');
+    expect(__testing.state.contextFilterReport?.suppressed).toEqual([secondProjectPath, firstProjectPath]);
   });
 
   it("restores tool and thinking overrides only when current values still match plugin-applied overrides", () => {
