@@ -12,11 +12,6 @@ type ContextPolicy = {
   project?: ContextDecision;
 };
 
-type ContextFile = {
-  path: string;
-  content: string;
-};
-
 type Posture = {
   id: string;
   label: string;
@@ -238,6 +233,14 @@ function loadPostures(cwd: string) {
   resetRegistry();
   mergeConfig(readConfig(join(getAgentDir(), "postures.json")), "global config");
   mergeConfig(readConfig(resolve(cwd, ".pi", "postures.json")), "project config");
+  if (!state.postures.has(state.activePostureId)) {
+    state.activePostureId = "default";
+  }
+}
+
+function reloadAndReconcile(pi: ExtensionAPI, ctx: ExtensionContext) {
+  loadPostures(ctx.cwd);
+  applyRuntime(pi, ctx, activePosture());
 }
 
 function resolvePostureId(input: string): string | undefined {
@@ -393,47 +396,40 @@ function shouldSuppressContext(filePath: string, policy: ContextPolicy): boolean
   return global ? policy.global === "suppress" : policy.project === "suppress";
 }
 
-function renderProjectContext(files: ContextFile[]): string {
-  if (files.length === 0) return "";
-  let section = "<project_context>\n\nProject-specific instructions and guidelines:\n\n";
-  for (const file of files) {
-    section += `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>\n\n`;
-  }
-  section += "</project_context>\n";
-  return section;
+function filterRenderedProjectContextBody(body: string, policy: ContextPolicy): string {
+  state.contextFilterReport = { kept: [], suppressed: [] };
+  return body.replace(
+    /<project_instructions path="([^"]+)">\n[\s\S]*?\n<\/project_instructions>\n*/g,
+    (entry: string, filePath: string) => {
+      if (shouldSuppressContext(filePath, policy)) {
+        state.contextFilterReport?.suppressed.push(filePath);
+        return "";
+      }
+      state.contextFilterReport?.kept.push(filePath);
+      return entry.endsWith("\n\n") ? entry : `${entry.trimEnd()}\n\n`;
+    },
+  );
 }
 
-function filterProjectContext(
-  systemPrompt: string,
-  policy: ContextPolicy | undefined,
-  contextFiles: ContextFile[] | undefined,
-): string {
+function filterProjectContext(systemPrompt: string, policy: ContextPolicy | undefined): string {
   state.contextFilterReport = undefined;
   if (!policy || (policy.global !== "suppress" && policy.project !== "suppress")) return systemPrompt;
-  if (!contextFiles) {
-    addConfigError("contextPolicy: Pi did not provide structured context files; suppression skipped");
+
+  const projectContextPattern = /<project_context>([\s\S]*?)<\/project_context>\n?/;
+  if (!projectContextPattern.test(systemPrompt)) {
+    addConfigError("contextPolicy: current system prompt has no project_context block; suppression skipped");
     return systemPrompt;
   }
 
-  const keptFiles = contextFiles.filter((file) => !shouldSuppressContext(file.path, policy));
-  const suppressedFiles = contextFiles.filter((file) => shouldSuppressContext(file.path, policy));
-  state.contextFilterReport = {
-    kept: keptFiles.map((file) => file.path),
-    suppressed: suppressedFiles.map((file) => file.path),
-  };
-  const replacement = renderProjectContext(keptFiles);
-  const projectContextPattern = /<project_context>[\s\S]*?<\/project_context>\n?/;
-
-  if (!projectContextPattern.test(systemPrompt)) {
-    addConfigError("contextPolicy: rendered system prompt had no project_context block to replace");
-    return replacement ? `${systemPrompt}\n\n${replacement}` : systemPrompt;
-  }
-
-  return systemPrompt.replace(projectContextPattern, replacement);
+  return systemPrompt.replace(projectContextPattern, (_full, body: string) => {
+    const filteredBody = filterRenderedProjectContextBody(body, policy);
+    if (!filteredBody.includes("<project_instructions")) return "";
+    return `<project_context>${filteredBody}</project_context>\n`;
+  });
 }
 
-function addPromptOverlay(systemPrompt: string, posture: Posture, contextFiles?: ContextFile[]): string {
-  const filtered = filterProjectContext(systemPrompt, posture.contextPolicy, contextFiles);
+function addPromptOverlay(systemPrompt: string, posture: Posture): string {
+  const filtered = filterProjectContext(systemPrompt, posture.contextPolicy);
   if (!posture.promptOverlay) return filtered;
   return `${filtered}\n\n<pi_posture id="${posture.id}">\n${posture.promptOverlay}\n</pi_posture>`;
 }
@@ -453,6 +449,18 @@ function restorePostureFromSession(ctx: ExtensionContext) {
   }
 }
 
+export const __testing = {
+  state,
+  resetRegistry,
+  loadPostures,
+  resolvePostureId,
+  activePosture,
+  applyRuntime,
+  addPromptOverlay,
+  filterProjectContext,
+  inspectText,
+};
+
 export default function piPosture(pi: ExtensionAPI) {
   resetRegistry();
 
@@ -469,7 +477,7 @@ export default function piPosture(pi: ExtensionAPI) {
         .map((value) => ({ value, label: value }));
     },
     handler: async (args, ctx) => {
-      loadPostures(ctx.cwd);
+      reloadAndReconcile(pi, ctx);
       const arg = normalizeId(args);
 
       if (!arg) {
@@ -534,7 +542,7 @@ export default function piPosture(pi: ExtensionAPI) {
     setStatus(ctx);
     const posture = activePosture();
     if (posture.id === "default") return;
-    return { systemPrompt: addPromptOverlay(event.systemPrompt, posture, event.systemPromptOptions.contextFiles) };
+    return { systemPrompt: addPromptOverlay(event.systemPrompt, posture) };
   });
 
   pi.on("session_shutdown", () => {

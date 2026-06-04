@@ -128,6 +128,7 @@ Built-in postures inherit all context. Suppression is an advanced custom-posture
 ```bash
 npm install
 npm run typecheck
+npm test
 ```
 
 ## License
