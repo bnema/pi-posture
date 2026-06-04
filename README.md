@@ -101,6 +101,22 @@ Example:
 }
 ```
 
+Enable the startup picker:
+
+```json
+{
+  "startupPicker": {
+    "enabled": true,
+    "onlyWhenUnset": true,
+    "include": ["default", "agent", "assist", "learn", "review"],
+    "reasons": ["startup", "new", "resume", "fork"],
+    "timeoutMs": 10000
+  }
+}
+```
+
+`startupPicker` can also be `true` or `false`. The picker runs only in interactive UI sessions, skips `/reload`, and with `onlyWhenUnset` enabled it does not prompt when the current session branch already has a saved posture.
+
 Supported posture fields:
 
 ```ts

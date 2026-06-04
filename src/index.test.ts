@@ -19,16 +19,23 @@ function projectContext(path: string, content: string) {
   return `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
 }
 
-function fakeExtension(cwd: string) {
+function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: string; branch?: any[] } = {}) {
   let commandHandler: ((args: string, ctx: any) => Promise<void>) | undefined;
+  const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<void> | void>>();
   const messages: string[] = [];
+  const appended: Array<{ customType: string; data?: unknown }> = [];
+  const selectCalls: Array<{ title: string; choices: string[]; options?: unknown }> = [];
   const pi = {
     registerMessageRenderer() {},
     registerCommand(_name: string, options: { handler: (args: string, ctx: any) => Promise<void> }) {
       commandHandler = options.handler;
     },
-    on() {},
-    appendEntry() {},
+    on(event: string, handler: (event: any, ctx: any) => Promise<void> | void) {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    },
+    appendEntry(customType: string, data?: unknown) {
+      appended.push({ customType, data });
+    },
     sendMessage(message: { content: string }) {
       messages.push(message.content);
     },
@@ -52,17 +59,31 @@ function fakeExtension(cwd: string) {
   };
   const ctx = {
     cwd,
-    hasUI: false,
+    hasUI: options.hasUI ?? false,
     ui: {
       notify() {},
       setStatus() {},
+      select: async (title: string, choices: string[], selectOptions?: unknown) => {
+        selectCalls.push({ title, choices, options: selectOptions });
+        return options.selectChoice;
+      },
     },
-    sessionManager: { getBranch: () => [] },
+    sessionManager: { getBranch: () => options.branch ?? [] },
   };
 
   piPosture(pi as any);
   if (!commandHandler) throw new Error("/posture command was not registered");
-  return { pi, ctx, messages, run: (args: string) => commandHandler!(args, ctx) };
+  return {
+    pi,
+    ctx,
+    messages,
+    appended,
+    selectCalls,
+    run: (args: string) => commandHandler!(args, ctx),
+    emit: async (event: string, payload: any) => {
+      for (const handler of handlers.get(event) ?? []) await handler(payload, ctx);
+    },
+  };
 }
 
 describe("pi-posture internals", () => {
@@ -185,5 +206,131 @@ describe("pi-posture internals", () => {
     expect(harness.pi.activeTools).toEqual(["read", "bash", "edit", "write"]);
     expect(harness.pi.thinking).toBe("medium");
     expect(harness.messages.at(-1)).toBe("posture: default");
+  });
+
+  it("loads startup picker config and exposes selectable postures", () => {
+    writeProjectConfig(cwd, {
+      startupPicker: {
+        enabled: true,
+        include: ["learn", "pair"],
+        reasons: ["startup", "new"],
+        timeoutMs: 2500,
+      },
+    });
+
+    __testing.loadPostures(cwd);
+
+    expect(__testing.state.startupPicker.enabled).toBe(true);
+    expect(__testing.state.startupPicker.reasons).toEqual(["startup", "new"]);
+    expect(__testing.state.startupPicker.timeoutMs).toBe(2500);
+    expect(__testing.selectableStartupPostures().map((posture) => posture.id)).toEqual(["learn", "assist"]);
+  });
+
+  it("reports invalid startup picker entries and deduplicates alias targets", () => {
+    writeProjectConfig(cwd, {
+      startupPicker: {
+        enabled: true,
+        include: ["learn", "teacher", "missing", "", 123],
+        reasons: ["startup", "reload", 123],
+      },
+    });
+
+    __testing.loadPostures(cwd);
+
+    expect(__testing.selectableStartupPostures().map((posture) => posture.id)).toEqual(["learn"]);
+    expect(__testing.inspectText()).toContain('startupPicker.include: duplicate posture "learn" from "teacher"');
+    expect(__testing.inspectText()).toContain('startupPicker.include: unknown posture or alias "missing"');
+    expect(__testing.inspectText()).toContain("project config.startupPicker.include[3]: must not be empty");
+    expect(__testing.inspectText()).toContain("project config.startupPicker.include[4]: must be a string");
+    expect(__testing.inspectText()).toContain('project config.startupPicker.reasons: invalid reason "reload"');
+    expect(__testing.inspectText()).toContain("project config.startupPicker.reasons[2]: must be a string");
+  });
+
+  it("does not run startup picker without UI or when session already has a posture", () => {
+    writeProjectConfig(cwd, { startupPicker: true });
+    __testing.loadPostures(cwd);
+
+    const noUi = { hasUI: false };
+    expect(__testing.startupPickerShouldRun("startup", noUi as any, false)).toBe(false);
+
+    const withUi = { hasUI: true };
+    expect(__testing.startupPickerShouldRun("startup", withUi as any, true)).toBe(false);
+    expect(__testing.startupPickerShouldRun("reload", withUi as any, false)).toBe(false);
+    expect(__testing.startupPickerShouldRun("startup", withUi as any, false)).toBe(true);
+  });
+
+  it("session_start never opens the picker on reload or non-UI sessions", async () => {
+    writeProjectConfig(cwd, { startupPicker: { enabled: true, reasons: ["reload", "startup"] } });
+    const reloadHarness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance." });
+    await reloadHarness.emit("session_start", { type: "session_start", reason: "reload" });
+    expect(reloadHarness.selectCalls).toHaveLength(0);
+    expect(reloadHarness.appended).toEqual([]);
+
+    const noUiHarness = fakeExtension(cwd, { hasUI: false, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance." });
+    await noUiHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(noUiHarness.selectCalls).toHaveLength(0);
+    expect(noUiHarness.appended).toEqual([]);
+  });
+
+  it("startup picker applies and persists the selected posture", async () => {
+    writeProjectConfig(cwd, { startupPicker: { enabled: true, include: ["default", "learn"], timeoutMs: 1234 } });
+    const harness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance." });
+
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+    expect(harness.selectCalls).toEqual([
+      {
+        title: "Choose posture for this session",
+        choices: [
+          "default — Plugin-off behavior. Pi runs normally with no posture overlay.",
+          "learn — Tutor posture for learning while still using the full toolset for accurate guidance.",
+        ],
+        options: { timeout: 1234 },
+      },
+    ]);
+    expect(__testing.state.activePostureId).toBe("learn");
+    expect(harness.appended).toContainEqual({ customType: "posture", data: expect.objectContaining({ id: "learn" }) });
+    expect(harness.messages.at(-1)).toBe("Switched to posture: learn");
+  });
+
+  it("startup picker cancel or unknown selection leaves posture unchanged", async () => {
+    writeProjectConfig(cwd, { startupPicker: { enabled: true, include: ["learn"] } });
+
+    const cancelHarness = fakeExtension(cwd, { hasUI: true });
+    await cancelHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(__testing.state.activePostureId).toBe("default");
+    expect(cancelHarness.appended).toEqual([]);
+    expect(cancelHarness.messages).toEqual([]);
+
+    const unknownHarness = fakeExtension(cwd, { hasUI: true, selectChoice: "missing" });
+    await unknownHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(__testing.state.activePostureId).toBe("default");
+    expect(unknownHarness.appended).toEqual([]);
+    expect(unknownHarness.messages).toEqual([]);
+  });
+
+  it("session restore detects existing posture entries and skips startup picker", async () => {
+    writeProjectConfig(cwd, { startupPicker: true });
+    const branch = [{ type: "custom", customType: "posture", data: { id: "review" } }];
+    const harness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance.", branch });
+
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+    expect(__testing.state.activePostureId).toBe("review");
+    expect(harness.selectCalls).toHaveLength(0);
+    expect(harness.appended).toEqual([]);
+    expect(harness.messages).toEqual([]);
+  });
+
+  it("onlyWhenUnset false prompts even when the session branch already has a posture", async () => {
+    writeProjectConfig(cwd, { startupPicker: { enabled: true, onlyWhenUnset: false, include: ["learn"] } });
+    const branch = [{ type: "custom", customType: "posture", data: { id: "review" } }];
+    const harness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance.", branch });
+
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+
+    expect(harness.selectCalls).toHaveLength(1);
+    expect(__testing.state.activePostureId).toBe("learn");
+    expect(harness.appended).toContainEqual({ customType: "posture", data: expect.objectContaining({ id: "learn" }) });
   });
 });

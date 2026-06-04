@@ -22,9 +22,20 @@ type Posture = {
   thinking?: ThinkingLevel;
 };
 
+type SessionStartReason = "startup" | "reload" | "new" | "resume" | "fork";
+
+type StartupPickerConfig = {
+  enabled: boolean;
+  onlyWhenUnset: boolean;
+  include: string[];
+  reasons: SessionStartReason[];
+  timeoutMs?: number;
+};
+
 type PostureConfig = {
   postures?: Record<string, Partial<Posture>>;
   aliases?: Record<string, string>;
+  startupPicker?: Partial<StartupPickerConfig> | boolean;
 };
 
 type ContextFilterReport = {
@@ -36,6 +47,7 @@ type RuntimeState = {
   activePostureId: string;
   postures: Map<string, Posture>;
   aliases: Map<string, string>;
+  startupPicker: StartupPickerConfig;
   configErrors: string[];
   contextFilterReport?: ContextFilterReport;
   toolSnapshot?: string[];
@@ -46,6 +58,13 @@ type RuntimeState = {
 
 const STATUS_KEY = "pi-posture";
 const MESSAGE_TYPE = "pi-posture";
+
+const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
+  enabled: false,
+  onlyWhenUnset: true,
+  include: ["default", "agent", "assist", "learn", "review"],
+  reasons: ["startup", "new", "resume", "fork"],
+};
 
 const BUILTIN_POSTURES: Posture[] = [
   {
@@ -103,6 +122,7 @@ const state: RuntimeState = {
   activePostureId: "default",
   postures: new Map(),
   aliases: new Map(),
+  startupPicker: { ...DEFAULT_STARTUP_PICKER },
   configErrors: [],
 };
 
@@ -113,6 +133,7 @@ function normalizeId(value: string): string {
 function resetRegistry() {
   state.postures = new Map(BUILTIN_POSTURES.map((posture) => [posture.id, posture]));
   state.aliases = new Map(Object.entries(BUILTIN_ALIASES));
+  state.startupPicker = { ...DEFAULT_STARTUP_PICKER, include: [...DEFAULT_STARTUP_PICKER.include], reasons: [...DEFAULT_STARTUP_PICKER.reasons] };
   state.configErrors = [];
 }
 
@@ -160,6 +181,72 @@ function normalizeContextPolicy(value: unknown, source: string): ContextPolicy |
     else addConfigError(`${source}.contextPolicy.project: expected inherit or suppress`);
   }
   return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+function isConfigurableSessionStartReason(value: unknown): value is Exclude<SessionStartReason, "reload"> {
+  return value === "startup" || value === "new" || value === "resume" || value === "fork";
+}
+
+function normalizeStringList(value: unknown, source: string): string[] | undefined {
+  if (!Array.isArray(value)) {
+    addConfigError(`${source}: must be an array`);
+    return undefined;
+  }
+  const normalized: string[] = [];
+  value.forEach((item, index) => {
+    if (typeof item !== "string") {
+      addConfigError(`${source}[${index}]: must be a string`);
+      return;
+    }
+    const id = normalizeId(item);
+    if (!id) {
+      addConfigError(`${source}[${index}]: must not be empty`);
+      return;
+    }
+    normalized.push(id);
+  });
+  return normalized;
+}
+
+function mergeStartupPicker(value: PostureConfig["startupPicker"], source: string) {
+  if (value === undefined) return;
+  if (typeof value === "boolean") {
+    state.startupPicker.enabled = value;
+    return;
+  }
+  if (!isRecord(value)) {
+    addConfigError(`${source}.startupPicker: must be an object or boolean`);
+    return;
+  }
+
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled === "boolean") state.startupPicker.enabled = value.enabled;
+    else addConfigError(`${source}.startupPicker.enabled: must be a boolean`);
+  }
+  if (value.onlyWhenUnset !== undefined) {
+    if (typeof value.onlyWhenUnset === "boolean") state.startupPicker.onlyWhenUnset = value.onlyWhenUnset;
+    else addConfigError(`${source}.startupPicker.onlyWhenUnset: must be a boolean`);
+  }
+  if (value.include !== undefined) {
+    const include = normalizeStringList(value.include, `${source}.startupPicker.include`);
+    if (include) state.startupPicker.include = include;
+  }
+  if (value.reasons !== undefined) {
+    const reasons = normalizeStringList(value.reasons, `${source}.startupPicker.reasons`);
+    if (reasons) {
+      const valid = reasons.filter(isConfigurableSessionStartReason);
+      const invalid = reasons.filter((reason) => !isConfigurableSessionStartReason(reason));
+      for (const reason of invalid) addConfigError(`${source}.startupPicker.reasons: invalid reason "${reason}"`);
+      state.startupPicker.reasons = valid;
+    }
+  }
+  if (value.timeoutMs !== undefined) {
+    if (typeof value.timeoutMs === "number" && Number.isFinite(value.timeoutMs) && value.timeoutMs > 0) {
+      state.startupPicker.timeoutMs = value.timeoutMs;
+    } else {
+      addConfigError(`${source}.startupPicker.timeoutMs: must be a positive number`);
+    }
+  }
 }
 
 function normalizePosture(id: string, value: Partial<Posture>, source: string): Posture | undefined {
@@ -227,12 +314,33 @@ function mergeConfig(config: PostureConfig | undefined, source: string) {
       }
     }
   }
+  mergeStartupPicker(config.startupPicker, source);
+}
+
+function normalizeStartupPickerConfig() {
+  const seen = new Set<string>();
+  const include: string[] = [];
+  for (const rawId of state.startupPicker.include) {
+    const id = resolvePostureId(rawId);
+    if (!id) {
+      addConfigError(`startupPicker.include: unknown posture or alias "${rawId}"`);
+      continue;
+    }
+    if (seen.has(id)) {
+      addConfigError(`startupPicker.include: duplicate posture "${id}" from "${rawId}"`);
+      continue;
+    }
+    seen.add(id);
+    include.push(rawId);
+  }
+  state.startupPicker.include = include;
 }
 
 function loadPostures(cwd: string) {
   resetRegistry();
   mergeConfig(readConfig(join(getAgentDir(), "postures.json")), "global config");
   mergeConfig(readConfig(resolve(cwd, ".pi", "postures.json")), "project config");
+  normalizeStartupPickerConfig();
   if (!state.postures.has(state.activePostureId)) {
     state.activePostureId = "default";
   }
@@ -434,15 +542,80 @@ function rememberPosture(pi: ExtensionAPI, id: string) {
   pi.appendEntry("posture", { id, timestamp: Date.now() });
 }
 
-function restorePostureFromSession(ctx: ExtensionContext) {
+function restorePostureFromSession(ctx: ExtensionContext): boolean {
+  let found = false;
   state.activePostureId = "default";
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type === "custom" && entry.customType === "posture") {
       const data = entry.data as { id?: unknown } | undefined;
       const id = typeof data?.id === "string" ? resolvePostureId(data.id) : undefined;
-      if (id) state.activePostureId = id;
+      if (id) {
+        state.activePostureId = id;
+        found = true;
+      }
     }
   }
+  return found;
+}
+
+function selectableStartupPostures(): Posture[] {
+  return state.startupPicker.include
+    .map(resolvePostureId)
+    .filter((id): id is string => !!id)
+    .map((id) => state.postures.get(id))
+    .filter((posture): posture is Posture => !!posture);
+}
+
+function postureLabel(posture: Posture): string {
+  return `${posture.id} — ${posture.description}`;
+}
+
+async function selectPosture(
+  ctx: ExtensionContext,
+  title: string,
+  postures: Posture[],
+  timeoutMs?: number,
+): Promise<Posture | undefined> {
+  const labels = postures.map(postureLabel);
+  const choice = await ctx.ui.select(title, labels, { timeout: timeoutMs });
+  const index = labels.indexOf(choice ?? "");
+  return index >= 0 ? postures[index] : undefined;
+}
+
+function switchPosture(pi: ExtensionAPI, ctx: ExtensionContext, posture: Posture) {
+  state.activePostureId = posture.id;
+  applyRuntime(pi, ctx, posture);
+  rememberPosture(pi, posture.id);
+  pi.sendMessage({ customType: MESSAGE_TYPE, content: `Switched to ${postureSummary(posture)}`, display: true });
+}
+
+function startupPickerShouldRun(reason: SessionStartReason, ctx: ExtensionContext, hasSessionPosture: boolean): boolean {
+  if (reason === "reload") return false;
+  if (!state.startupPicker.enabled) return false;
+  if (!ctx.hasUI) return false;
+  if (!state.startupPicker.reasons.includes(reason)) return false;
+  if (state.startupPicker.onlyWhenUnset && hasSessionPosture) return false;
+  return selectableStartupPostures().length > 0;
+}
+
+async function maybePromptStartupPosture(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  reason: SessionStartReason,
+  hasSessionPosture: boolean,
+): Promise<boolean> {
+  if (!startupPickerShouldRun(reason, ctx, hasSessionPosture)) return false;
+
+  const selected = await selectPosture(
+    ctx,
+    "Choose posture for this session",
+    selectableStartupPostures(),
+    state.startupPicker.timeoutMs,
+  );
+  if (!selected) return false;
+
+  switchPosture(pi, ctx, selected);
+  return true;
 }
 
 export const __testing = {
@@ -455,6 +628,12 @@ export const __testing = {
   addPromptOverlay,
   filterProjectContext,
   inspectText,
+  restorePostureFromSession,
+  startupPickerShouldRun,
+  selectableStartupPostures,
+  selectPosture,
+  switchPosture,
+  postureLabel,
 };
 
 export default function piPosture(pi: ExtensionAPI) {
@@ -481,17 +660,9 @@ export default function piPosture(pi: ExtensionAPI) {
           pi.sendMessage({ customType: MESSAGE_TYPE, content: listText(), display: true });
           return;
         }
-        const choices = Array.from(state.postures.values()).map((posture) => ({
-          value: posture.id,
-          label: `${posture.id} — ${posture.description}`,
-        }));
-        const choice = await ctx.ui.select("Select posture", choices.map((choice) => choice.label));
-        const selected = choices.find((item) => item.label === choice)?.value;
+        const selected = await selectPosture(ctx, "Select posture", Array.from(state.postures.values()));
         if (!selected) return;
-        state.activePostureId = selected;
-        applyRuntime(pi, ctx, activePosture());
-        rememberPosture(pi, selected);
-        pi.sendMessage({ customType: MESSAGE_TYPE, content: `Switched to ${postureSummary()}`, display: true });
+        switchPosture(pi, ctx, selected);
         return;
       }
 
@@ -515,18 +686,15 @@ export default function piPosture(pi: ExtensionAPI) {
         return;
       }
 
-      state.activePostureId = id;
-      applyRuntime(pi, ctx, activePosture());
-      rememberPosture(pi, id);
-      const message = `Switched to ${postureSummary()}`;
-      pi.sendMessage({ customType: MESSAGE_TYPE, content: message, display: true });
+      switchPosture(pi, ctx, state.postures.get(id)!);
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     loadPostures(ctx.cwd);
-    restorePostureFromSession(ctx);
+    const hasSessionPosture = restorePostureFromSession(ctx);
     applyRuntime(pi, ctx, activePosture());
+    await maybePromptStartupPosture(pi, ctx, event.reason, hasSessionPosture);
     if (state.configErrors.length > 0 && ctx.hasUI) {
       ctx.ui.notify(`pi-posture loaded with ${state.configErrors.length} config error(s). Run /posture inspect.`, "warning");
     }
