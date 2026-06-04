@@ -267,10 +267,6 @@ function postureSummary(posture = activePosture()): string {
   return [`posture: ${posture.id}`, ...suppressed].join(" · ");
 }
 
-function publish(ctx: ExtensionContext, text: string, level: "info" | "warning" | "error" = "info") {
-  if (ctx.hasUI) ctx.ui.notify(text, level);
-}
-
 function setStatus(ctx: ExtensionContext) {
   const posture = activePosture();
   ctx.ui.setStatus(STATUS_KEY, posture.id === "default" ? undefined : postureSummary(posture));
@@ -495,7 +491,7 @@ export default function piPosture(pi: ExtensionAPI) {
         state.activePostureId = selected;
         applyRuntime(pi, ctx, activePosture());
         rememberPosture(pi, selected);
-        publish(ctx, postureSummary(), selected === "default" ? "info" : "info");
+        pi.sendMessage({ customType: MESSAGE_TYPE, content: `Switched to ${postureSummary()}`, display: true });
         return;
       }
 
@@ -515,7 +511,6 @@ export default function piPosture(pi: ExtensionAPI) {
       const id = resolvePostureId(arg);
       if (!id) {
         const message = `Unknown posture: ${args.trim() || "(empty)"}. Try /posture list.`;
-        publish(ctx, message, "error");
         pi.sendMessage({ customType: MESSAGE_TYPE, content: message, display: true });
         return;
       }
@@ -524,7 +519,6 @@ export default function piPosture(pi: ExtensionAPI) {
       applyRuntime(pi, ctx, activePosture());
       rememberPosture(pi, id);
       const message = `Switched to ${postureSummary()}`;
-      publish(ctx, message);
       pi.sendMessage({ customType: MESSAGE_TYPE, content: message, display: true });
     },
   });
