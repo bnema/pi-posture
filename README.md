@@ -47,6 +47,37 @@ Optional config files:
 
 Project config overrides global config. Config errors do not break Pi startup; use `/posture inspect` to see effective overlay details.
 
+Example:
+
+```json
+{
+  "postures": {
+    "coach": {
+      "label": "Coach",
+      "description": "Ask Socratic questions before giving implementation advice.",
+      "promptOverlay": "Ask one concise guiding question before proposing a solution.",
+      "contextPolicy": {
+        "global": "inherit",
+        "project": "inherit"
+      },
+      "thinking": "medium"
+    }
+  },
+  "aliases": {
+    "socratic": "coach"
+  },
+  "startupPicker": {
+    "enabled": true,
+    "onlyWhenUnset": true,
+    "include": ["default", "agent", "assist", "learn", "review"],
+    "reasons": ["startup", "new", "resume", "fork"],
+    "timeoutMs": 10000
+  }
+}
+```
+
+Supported posture fields: `label`, `description`, `promptOverlay`, `contextPolicy.global`, `contextPolicy.project`, `activeTools`, and `thinking`. `startupPicker` can also be `true` or `false`.
+
 ## Context policy
 
 Built-in postures keep the full toolset available. Learning mode is cognitive guidance, not a permissions mode. Switching back to `default` restores previous active tools and thinking level when the extension changed them.
