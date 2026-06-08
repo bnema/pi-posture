@@ -1,14 +1,14 @@
 {
   "name": "pi-posture",
   "version": "0.1.0",
-  "description": "Switch Pi coding-agent harness postures live.",
+  "description": "Switch Pi working postures live.",
   "type": "module",
   "license": "MIT",
   "keywords": [
-    "pi-package",
+    "pi",
     "pi-extension",
-    "coding-agent",
-    "posture"
+    "postures",
+    "coding-agent"
   ],
   "pi": {
     "extensions": [
