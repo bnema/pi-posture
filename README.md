@@ -20,7 +20,7 @@ Built-in postures:
 pi install git:github.com/bnema/pi-posture
 ```
 
-## Use
+## Commands
 
 ```text
 /posture
@@ -34,12 +34,22 @@ pi install git:github.com/bnema/pi-posture
 /posture review
 ```
 
+Aliases include `off`, `reset`, `vanilla`, `teacher`, `tutor`, `study`, `pair`, `autonomous`, and `execute`.
+
+## Custom postures
+
 Optional config files:
 
 ```text
 ~/.pi/agent/postures.json
 .pi/postures.json
 ```
+
+Project config overrides global config. Config errors do not break Pi startup; use `/posture inspect` to see effective overlay details.
+
+## Context policy
+
+Built-in postures keep the full toolset available. Learning mode is cognitive guidance, not a permissions mode. Switching back to `default` restores previous active tools and thinking level when the extension changed them.
 
 ## Develop
 
