@@ -107,6 +107,34 @@ describe("pi-posture internals", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  // ============================================================
+  // Phase 1 re-review: behavior regression tests
+  // ============================================================
+
+  it("preserves parse/root config file errors through loadPostures", () => {
+    writeFileSync(join(cwd, ".pi", "postures.json"), "not valid json", "utf8");
+    __testing.loadPostures(cwd);
+    const text = __testing.inspectText();
+    expect(text).toContain("postures.json: Unexpected token");
+    expect(text).toContain("Config errors:");
+  });
+
+  it("preserves non-object root config file error through loadPostures", () => {
+    writeFileSync(join(cwd, ".pi", "postures.json"), JSON.stringify([]), "utf8");
+    __testing.loadPostures(cwd);
+    const text = __testing.inspectText();
+    expect(text).toContain("postures.json: root must be an object");
+    expect(text).toContain("Config errors:");
+  });
+
+  it("preserves parse error alongside builder validation errors", () => {
+    writeFileSync(join(cwd, ".pi", "postures.json"), "{ invalid json", "utf8");
+    __testing.loadPostures(cwd);
+    const text = __testing.inspectText();
+    expect(text).toContain("postures.json:");
+    expect(text).toContain("Config errors:");
+  });
+
   it("resolves built-in aliases", () => {
     expect(__testing.resolvePostureId("vanilla")).toBe("default");
     expect(__testing.resolvePostureId("teacher")).toBe("learn");
@@ -772,5 +800,38 @@ describe("buildPostureRegistry (pure)", () => {
     const posture = result.postures.get("custom")!;
     expect(posture.policy).toBeDefined();
     expect(posture.policy!.type).toBe("static");
+  });
+
+  it("invalid thinking clears existing value from previous config", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { thinking: "low" } } },
+      { postures: { test: { thinking: "huge" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.thinking).toBeUndefined();
+    expect(result.configErrors).toContain(
+      "config[1].postures.test.thinking: invalid thinking level",
+    );
+  });
+
+  it("invalid thinking without existing value also sets undefined", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { thinking: "huge" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.thinking).toBeUndefined();
+    expect(result.configErrors).toContain(
+      "config[0].postures.test.thinking: invalid thinking level",
+    );
+  });
+
+  it("valid thinking override preserves from later config", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { thinking: "low" } } },
+      { postures: { test: { thinking: "high" } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.thinking).toBe("high");
+    expect(result.configErrors).toEqual([]);
   });
 });

@@ -326,6 +326,7 @@ export function buildPostureRegistry(
             if (validateThinking(entry.thinking)) {
               thinking = entry.thinking;
             } else {
+              thinking = undefined;
               addErr(`${source}.postures.${rawId}.thinking: invalid thinking level`);
             }
           }
@@ -480,20 +481,21 @@ export function resetRegistry(): void {
   internalState.configErrors = [];
 }
 
-function readConfig(path: string): PostureConfig | undefined {
-  if (!existsSync(path)) return undefined;
+function readConfig(path: string): { config: PostureConfig | undefined; errors: string[] } {
+  if (!existsSync(path)) return { config: undefined, errors: [] };
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     if (!isRecord(parsed)) throw new Error("root must be an object");
-    return parsed as PostureConfig;
+    return { config: parsed as PostureConfig, errors: [] };
   } catch (error) {
-    addConfigError(
-      `${path}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return undefined;
+    return {
+      config: undefined,
+      errors: [
+        `${path}: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+    };
   }
 }
-
 
 
 
@@ -509,17 +511,22 @@ export function resolvePostureId(input: string): string | undefined {
 }
 
 export function loadPostures(cwd: string): void {
+  const [globalResult, projectResult] = [
+    readConfig(join(getAgentDir(), "postures.json")),
+    readConfig(resolve(cwd, ".pi", "postures.json")),
+  ];
   const result = buildPostureRegistry(
-    [
-      readConfig(join(getAgentDir(), "postures.json")),
-      readConfig(resolve(cwd, ".pi", "postures.json")),
-    ],
+    [globalResult.config, projectResult.config],
     ["global config", "project config"],
   );
   internalState.postures = result.postures;
   internalState.aliases = result.aliases;
   internalState.startupPicker = result.startupPicker;
-  internalState.configErrors = result.configErrors;
+  internalState.configErrors = [
+    ...globalResult.errors,
+    ...projectResult.errors,
+    ...result.configErrors,
+  ];
 }
 
 export function selectableStartupPostures(): PostureDefinition[] {
