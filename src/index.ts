@@ -724,7 +724,7 @@ export default function piPosture(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("posture", {
-    description: "Switch Pi harness posture: default, agent, assist, learn, review",
+    description: "Switch Pi harness posture: default, orchestrator, assist, learn, review",
     getArgumentCompletions: (prefix) => {
       const reg = getRegistryState();
       const values = [

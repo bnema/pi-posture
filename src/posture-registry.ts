@@ -214,21 +214,23 @@ export type PostureConfig = {
 // Constants
 // ============================================================
 
-/** Built-in agent policy providing dynamic guidance around autonomous
- *  progress, verification, and escalation. This is an internal policy
- *  that uses the same runtime hook dispatch mechanism as user-supplied
- *  custom policies, but is wired in code rather than via JSON config. */
-export const BUILTIN_AGENT_POLICY: PosturePolicy = {
+/** Built-in orchestrator policy providing dynamic guidance around primary
+ *  coordination, sub-agent delegation, autonomous execution, verification,
+ *  and escalation. This is an internal policy that uses the same runtime hook
+ *  dispatch mechanism as user-supplied custom policies, but is wired in code
+ *  rather than via JSON config. */
+export const BUILTIN_ORCHESTRATOR_POLICY: PosturePolicy = {
   type: "custom",
 
   onBeforeAgentStart: () => {
     return {
       systemPrompt:
-        "## Agent Guidance\n" +
+        "## Orchestrator Guidance\n" +
         "\n" +
-        "Maintain forward progress — do not stall on unnecessary checks.\n" +
+        "Act as the primary coordinator that delegates tasks to the appropriate sub-agents when they can make progress independently.\n" +
+        "You should remove the human from the loop once a plan has been defined and approved; handle routine execution decisions yourself.\n" +
+        "Work autonomously until the goal is complete; do not stall on unnecessary permission checks.\n" +
         "After making code changes, verify them (typecheck, tests, or relevant commands).\n" +
-        "Continue autonomously when the task path is clear.\n" +
         "If blocked, uncertain, or needing human judgment — explain clearly and ask.\n" +
         "Respect all higher-priority instructions and project safety rules.",
     };
@@ -255,7 +257,7 @@ export const BUILTIN_ASSIST_POLICY: PosturePolicy = {
         "The user remains the primary implementer — you are their pair. Do not take over or make broad edits unless explicitly asked to do so.\n" +
         "Propose narrow, specific next steps. Offer to inspect, run, verify, or explain local context.\n" +
         "Highlight trade-offs and risks before suggesting changes.\n" +
-        "If the user asks you to take the wheel, offer to switch to agent posture or proceed only with explicit permission.",
+        "If the user asks you to take the wheel, offer to switch to orchestrator posture or proceed only with explicit permission.",
     };
   },
 
@@ -321,7 +323,7 @@ export const BUILTIN_LEARN_POLICY: PosturePolicy = {
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   enabled: false,
   onlyWhenUnset: true,
-  include: ["default", "agent", "assist", "learn", "review"],
+  include: ["default", "orchestrator", "assist", "learn", "review"],
   reasons: ["startup", "new", "resume", "fork"],
 };
 
@@ -332,14 +334,14 @@ export const BUILTIN_POSTURES: PostureDefinition[] = [
     description: "Plugin-off behavior. Pi runs normally with no posture overlay.",
   },
   {
-    id: "agent",
-    label: "Agent",
+    id: "orchestrator",
+    label: "Orchestrator",
     description:
-      "Autonomous implementation posture for when the user wants Pi to take the wheel.",
-    promptOverlay: `You are in agent posture.
+      "Primary coordination posture for approved plans: delegates to sub-agents and works autonomously until the goal is complete.",
+    promptOverlay: `You are in orchestrator posture.
 
-The user explicitly wants delegated agentic execution. Move work forward with concise planning, code changes, command execution, and verification when appropriate. Keep the user informed, but do not stall on unnecessary permission checks. Continue to respect all higher-priority user, project, and safety instructions.`,
-    policy: BUILTIN_AGENT_POLICY,
+The user wants you to act as the primary coordinator that delegates tasks to the appropriate sub-agents. You should remove the human from the loop once a plan has been defined and approved, and work autonomously until the goal is complete. Move work forward with concise planning, code changes, command execution, and verification when appropriate. Continue to respect all higher-priority user, project, and safety instructions.`,
+    policy: BUILTIN_ORCHESTRATOR_POLICY,
   },
   {
     id: "assist",
@@ -381,8 +383,8 @@ export const BUILTIN_ALIASES: Record<string, string> = {
   tutor: "learn",
   study: "learn",
   pair: "assist",
-  autonomous: "agent",
-  execute: "agent",
+  autonomous: "orchestrator",
+  execute: "orchestrator",
 };
 
 // ============================================================
@@ -661,7 +663,7 @@ export function buildPostureRegistry(
           }
 
           // Preserve internal/custom policy from the existing definition
-          // (e.g., agent's built-in custom policy) when config override does
+          // (e.g., orchestrator's built-in custom policy) when config override does
           // not provide an explicit policy object.
           const mergedDef: PostureDefinition = {
             id,

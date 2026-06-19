@@ -532,14 +532,14 @@ describe("pi-posture internals", () => {
   // Policy adapter tests (Phase 1 — static compat shim)
   // ============================================================
 
-  it("adds policy to all built-in postures after registry reset, agent is custom", () => {
+  it("adds policy to all built-in postures after registry reset, orchestrator is custom", () => {
     __testing.resetRegistry();
     const reg = __testing.getRegistryState();
     for (const posture of reg.postures.values()) {
       expect(posture.policy).toBeDefined();
     }
-    // Agent, assist, learn, and review have built-in custom policies; default is static
-    expect(reg.postures.get("agent")!.policy!.type).toBe("custom");
+    // Orchestrator, assist, learn, and review have built-in custom policies; default is static
+    expect(reg.postures.get("orchestrator")!.policy!.type).toBe("custom");
     expect(reg.postures.get("assist")!.policy!.type).toBe("custom");
     expect(reg.postures.get("learn")!.policy!.type).toBe("custom");
     expect(reg.postures.get("review")!.policy!.type).toBe("custom");
@@ -610,10 +610,10 @@ describe("pi-posture internals", () => {
 
   it("inspect output does not expose policy internals for policy-backed postures", () => {
     __testing.resetRegistry();
-    __testing.runtimeState.activePostureId = "agent";
+    __testing.runtimeState.activePostureId = "orchestrator";
     const text = __testing.inspectText();
     // Standard fields still present
-    expect(text).toContain("Active posture: agent (Agent)");
+    expect(text).toContain("Active posture: orchestrator (Orchestrator)");
     expect(text).toContain("Context policy: global=inherit, project=inherit");
     // Policy internals not leaked
     expect(text).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
@@ -639,14 +639,14 @@ describe("pi-posture internals", () => {
         customType: "pi-posture-state",
         data: {
           states: {
-            agent: { activationCount: 3, lastActivatedAt: 1234 },
+            orchestrator: { activationCount: 3, lastActivatedAt: 1234 },
           },
         },
       },
     ];
     const ctx = { sessionManager: { getBranch: () => branch } } as any;
     __testing.restorePostureRuntimeState(ctx);
-    const state = __testing.getOrCreatePostureRuntimeState("agent");
+    const state = __testing.getOrCreatePostureRuntimeState("orchestrator");
     expect(state.activationCount).toBe(3);
     expect(state.lastActivatedAt).toBe(1234);
   });
@@ -658,7 +658,7 @@ describe("pi-posture internals", () => {
         customType: "pi-posture-state",
         data: {
           states: {
-            agent: { activationCount: 1, lastActivatedAt: 100 },
+            orchestrator: { activationCount: 1, lastActivatedAt: 100 },
           },
         },
       },
@@ -667,14 +667,14 @@ describe("pi-posture internals", () => {
         customType: "pi-posture-state",
         data: {
           states: {
-            agent: { activationCount: 5, lastActivatedAt: 500 },
+            orchestrator: { activationCount: 5, lastActivatedAt: 500 },
           },
         },
       },
     ];
     const ctx = { sessionManager: { getBranch: () => branch } } as any;
     __testing.restorePostureRuntimeState(ctx);
-    const state = __testing.getOrCreatePostureRuntimeState("agent");
+    const state = __testing.getOrCreatePostureRuntimeState("orchestrator");
     expect(state.activationCount).toBe(5);
     expect(state.lastActivatedAt).toBe(500);
   });
@@ -684,7 +684,7 @@ describe("pi-posture internals", () => {
       {
         type: "custom",
         customType: "pi-posture-state",
-        data: { states: { agent: { activationCount: 5 } } },
+        data: { states: { orchestrator: { activationCount: 5 } } },
       },
       {
         type: "custom",
@@ -694,7 +694,7 @@ describe("pi-posture internals", () => {
     ];
     const ctx = { sessionManager: { getBranch: () => branch } } as any;
     __testing.restorePostureRuntimeState(ctx);
-    expect(__testing.postureRuntimeStates.has("agent")).toBe(false);
+    expect(__testing.postureRuntimeStates.has("orchestrator")).toBe(false);
   });
 
   it("persists empty runtime state snapshots", () => {
@@ -773,16 +773,16 @@ describe("pi-posture internals", () => {
   });
 
   it("restored state objects are cloned (mutating branch data does not affect runtime state)", () => {
-    const branchData = { states: { agent: { activationCount: 5, lastActivatedAt: 100 } } };
+    const branchData = { states: { orchestrator: { activationCount: 5, lastActivatedAt: 100 } } };
     const branch = [
       { type: "custom", customType: "pi-posture-state", data: branchData },
     ];
     const ctx = { sessionManager: { getBranch: () => branch } } as any;
     __testing.restorePostureRuntimeState(ctx);
     // Mutate branch data reference
-    branchData.states.agent.activationCount = 99;
+    branchData.states.orchestrator.activationCount = 99;
     // Restored state should be a clone, unchanged
-    expect(__testing.getOrCreatePostureRuntimeState("agent").activationCount).toBe(5);
+    expect(__testing.getOrCreatePostureRuntimeState("orchestrator").activationCount).toBe(5);
   });
 
   it("sanitizePostureRuntimeState rejects invalid inputs", () => {
@@ -1139,10 +1139,10 @@ describe("policy hook dispatch", () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("pi-posture", undefined);
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("pi-posture-widget", undefined);
 
-    // Non-default static posture (e.g. agent)
-    __testing.runtimeState.activePostureId = "agent";
+    // Non-default static posture (e.g. orchestrator)
+    __testing.runtimeState.activePostureId = "orchestrator";
     __testing.updatePostureUi(pi, ctx);
-    expect(ctx.ui.setStatus).toHaveBeenCalledWith("pi-posture", "posture: agent");
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("pi-posture", "posture: orchestrator");
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("pi-posture-widget", undefined);
   });
 
@@ -2219,10 +2219,10 @@ describe("policy hook dispatch", () => {
 });
 
 // ============================================================
-// Agent built-in policy tests (Phase 3)
+// Orchestrator built-in policy tests (Phase 3)
 // ============================================================
 
-describe("agent built-in policy", () => {
+describe("orchestrator built-in policy", () => {
   let cwd: string;
 
   beforeEach(() => {
@@ -2241,18 +2241,18 @@ describe("agent built-in policy", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("agent posture has a built-in custom policy with onBeforeAgentStart and onTurnEnd", () => {
+  it("orchestrator posture has a built-in custom policy with onBeforeAgentStart and onTurnEnd", () => {
     __testing.resetRegistry();
-    const agent = __testing.getRegistryState().postures.get("agent")!;
-    expect(agent.policy).toBeDefined();
-    expect(agent.policy!.type).toBe("custom");
-    expect(agent.policy!.onBeforeAgentStart).toBeDefined();
-    expect(agent.policy!.onTurnEnd).toBeDefined();
+    const orchestrator = __testing.getRegistryState().postures.get("orchestrator")!;
+    expect(orchestrator.policy).toBeDefined();
+    expect(orchestrator.policy!.type).toBe("custom");
+    expect(orchestrator.policy!.onBeforeAgentStart).toBeDefined();
+    expect(orchestrator.policy!.onTurnEnd).toBeDefined();
   });
 
-  it("agent onBeforeAgentStart appends dynamic guidance after static overlay", async () => {
+  it("orchestrator onBeforeAgentStart appends dynamic guidance after static overlay", async () => {
     const harness = fakeExtension("/tmp");
-    __testing.runtimeState.activePostureId = "agent";
+    __testing.runtimeState.activePostureId = "orchestrator";
 
     const results = await harness.emit("before_agent_start", {
       prompt: "test",
@@ -2266,18 +2266,20 @@ describe("agent built-in policy", () => {
     expect(result).toBeDefined();
     // Static overlay present
     expect(result!.systemPrompt).toContain("base system prompt");
-    expect(result!.systemPrompt).toContain('<pi_posture id="agent">');
-    expect(result!.systemPrompt).toContain("delegated agentic execution");
+    expect(result!.systemPrompt).toContain('<pi_posture id="orchestrator">');
+    expect(result!.systemPrompt).toContain("primary coordinator");
+    expect(result!.systemPrompt).toContain("delegates tasks to the appropriate sub-agents");
+    expect(result!.systemPrompt).toContain("remove the human from the loop once a plan has been defined and approved");
     // Dynamic guidance appended
-    expect(result!.systemPrompt).toContain("Agent Guidance");
-    expect(result!.systemPrompt).toContain("Maintain forward progress");
+    expect(result!.systemPrompt).toContain("Orchestrator Guidance");
+    expect(result!.systemPrompt).toContain("work autonomously until the goal is complete");
     expect(result!.systemPrompt).toContain("verify");
     expect(result!.systemPrompt).toContain("blocked");
   });
 
-  it("agent onTurnEnd tracks turns in runtime state", async () => {
+  it("orchestrator onTurnEnd tracks turns in runtime state", async () => {
     const harness = fakeExtension("/tmp");
-    __testing.runtimeState.activePostureId = "agent";
+    __testing.runtimeState.activePostureId = "orchestrator";
 
     await harness.emit("turn_end", {
       type: "turn_end",
@@ -2285,7 +2287,7 @@ describe("agent built-in policy", () => {
       timestamp: 100,
     });
     expect(
-      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+      __testing.getOrCreatePostureRuntimeState("orchestrator").turnsInSession,
     ).toBe(1);
 
     await harness.emit("turn_end", {
@@ -2294,7 +2296,7 @@ describe("agent built-in policy", () => {
       timestamp: 200,
     });
     expect(
-      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+      __testing.getOrCreatePostureRuntimeState("orchestrator").turnsInSession,
     ).toBe(2);
 
     // Switching away stops increment
@@ -2305,11 +2307,11 @@ describe("agent built-in policy", () => {
       timestamp: 300,
     });
     expect(
-      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+      __testing.getOrCreatePostureRuntimeState("orchestrator").turnsInSession,
     ).toBe(2);
   });
 
-  it("agent dynamic guidance is not present when default posture is active", async () => {
+  it("orchestrator dynamic guidance is not present when default posture is active", async () => {
     const harness = fakeExtension("/tmp");
     __testing.runtimeState.activePostureId = "default";
 
@@ -2326,7 +2328,7 @@ describe("agent built-in policy", () => {
     expect(result).toBeUndefined();
   });
 
-  it("agent onBeforeAgentStart is not invoked when inactive", async () => {
+  it("orchestrator onBeforeAgentStart is not invoked when inactive", async () => {
     const harness = fakeExtension("/tmp");
     __testing.runtimeState.activePostureId = "learn";
 
@@ -2336,7 +2338,7 @@ describe("agent built-in policy", () => {
       systemPromptOptions: { cwd: "/tmp" },
     });
 
-    // Turn end on learn shouldn't affect agent's runtime state
+    // Turn end on learn shouldn't affect orchestrator runtime state
     await harness.emit("turn_end", {
       type: "turn_end",
       turnIndex: 0,
@@ -2344,45 +2346,45 @@ describe("agent built-in policy", () => {
     });
 
     expect(
-      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+      __testing.getOrCreatePostureRuntimeState("orchestrator").turnsInSession,
     ).toBeUndefined();
   });
 
-  it("config override for agent preserves its custom policy", () => {
+  it("config override for orchestrator preserves its custom policy", () => {
     const result = buildPostureRegistry([
       {
         postures: {
-          agent: { description: "Custom agent", thinking: "high" },
+          orchestrator: { description: "Custom orchestrator", thinking: "high" },
         },
       },
     ]);
-    const agent = result.postures.get("agent")!;
-    expect(agent.description).toBe("Custom agent");
-    expect(agent.thinking).toBe("high");
-    expect(agent.policy).toBeDefined();
-    expect(agent.policy!.type).toBe("custom");
-    expect(agent.policy!.onBeforeAgentStart).toBeDefined();
-    expect(agent.policy!.onTurnEnd).toBeDefined();
+    const orchestrator = result.postures.get("orchestrator")!;
+    expect(orchestrator.description).toBe("Custom orchestrator");
+    expect(orchestrator.thinking).toBe("high");
+    expect(orchestrator.policy).toBeDefined();
+    expect(orchestrator.policy!.type).toBe("custom");
+    expect(orchestrator.policy!.onBeforeAgentStart).toBeDefined();
+    expect(orchestrator.policy!.onTurnEnd).toBeDefined();
   });
 
-  it("agent prompt overlay remains intact after config description override", () => {
+  it("orchestrator prompt overlay remains intact after config description override", () => {
     const result = buildPostureRegistry([
       {
         postures: {
-          agent: { description: "Custom agent description" },
+          orchestrator: { description: "Custom orchestrator description" },
         },
       },
     ]);
-    const agent = result.postures.get("agent")!;
-    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "agent")!;
-    expect(agent.description).toBe("Custom agent description");
-    expect(agent.promptOverlay).toBe(builtIn.promptOverlay);
-    expect(agent.policy!.type).toBe("custom");
+    const orchestrator = result.postures.get("orchestrator")!;
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "orchestrator")!;
+    expect(orchestrator.description).toBe("Custom orchestrator description");
+    expect(orchestrator.promptOverlay).toBe(builtIn.promptOverlay);
+    expect(orchestrator.policy!.type).toBe("custom");
   });
 
-  it("agent policy hook uses custom policy dispatch (not static)", () => {
+  it("orchestrator policy hook uses custom policy dispatch (not static)", () => {
     __testing.resetRegistry();
-    __testing.runtimeState.activePostureId = "agent";
+    __testing.runtimeState.activePostureId = "orchestrator";
 
     const spy = vi.fn();
     __testing.callPolicyHook(spy, {
@@ -2390,17 +2392,17 @@ describe("agent built-in policy", () => {
       systemPrompt: "base",
     });
 
-    // Agent has custom policy, so hooks should be called
+    // Orchestrator has custom policy, so hooks should be called
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({ postureId: "agent" }),
+      expect.objectContaining({ postureId: "orchestrator" }),
       expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
     );
   });
 
-  it("agent policy does not intercept tool_call or tool_result events", async () => {
+  it("orchestrator policy does not intercept tool_call or tool_result events", async () => {
     const harness = fakeExtension("/tmp");
-    __testing.runtimeState.activePostureId = "agent";
+    __testing.runtimeState.activePostureId = "orchestrator";
 
     const toolCallResults = await harness.emit("tool_call", {
       type: "tool_call",
@@ -2954,7 +2956,7 @@ describe("learn built-in policy", () => {
 
   it("learn dynamic guidance is absent when another non-learn posture is active", async () => {
     const harness = fakeExtension("/tmp");
-    __testing.runtimeState.activePostureId = "agent";
+    __testing.runtimeState.activePostureId = "orchestrator";
 
     const results = await harness.emit("before_agent_start", {
       prompt: "test",
@@ -2966,7 +2968,7 @@ describe("learn built-in policy", () => {
       (r: any) => r && "systemPrompt" in r,
     ) as { systemPrompt: string } | undefined;
     expect(result).toBeDefined();
-    // Agent overlay present, but no learn dynamic guidance
+    // Orchestrator overlay present, but no learn dynamic guidance
     expect(result!.systemPrompt).not.toContain("Learn Guidance");
     expect(result!.systemPrompt).not.toContain("hint-first");
     expect(result!.systemPrompt).not.toContain("Socratic");
@@ -3124,12 +3126,13 @@ describe("command output compatibility", () => {
     const output = harness.messages.join("");
 
     expect(output).toContain("default");
-    expect(output).toContain("agent");
+    expect(output).toContain("orchestrator");
+    expect(output).not.toMatch(/\bagent\b/);
     expect(output).toContain("assist");
     expect(output).toContain("learn");
     expect(output).toContain("review");
     expect(output).toContain("Plugin-off behavior");
-    expect(output).toContain("Autonomous implementation");
+    expect(output).toContain("Primary coordination");
     expect(output).toContain("Human-led pair-programming");
     expect(output).toContain("Tutor posture for learning");
     expect(output).toContain("Critique-oriented posture");
@@ -3138,11 +3141,11 @@ describe("command output compatibility", () => {
   it("/posture status reports correct posture id for each built-in", async () => {
     const harness = fakeExtension(cwd);
 
-    await harness.run("agent");
-    expect(harness.messages.at(-1)).toContain("Switched to posture: agent");
+    await harness.run("orchestrator");
+    expect(harness.messages.at(-1)).toContain("Switched to posture: orchestrator");
 
     await harness.run("status");
-    expect(harness.messages.at(-1)).toBe("posture: agent");
+    expect(harness.messages.at(-1)).toBe("posture: orchestrator");
 
     await harness.run("learn");
     await harness.run("status");
@@ -3171,10 +3174,10 @@ describe("command output compatibility", () => {
     expect(output).toContain("Prompt overlay: no");
     expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
 
-    await harness.run("agent");
+    await harness.run("orchestrator");
     await harness.run("inspect");
     output = harness.messages.at(-1)!;
-    expect(output).toContain("Active posture: agent (Agent)");
+    expect(output).toContain("Active posture: orchestrator (Orchestrator)");
     expect(output).toContain("Prompt overlay: yes");
     expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
 
@@ -3203,31 +3206,31 @@ describe("command output compatibility", () => {
   it("/posture state displays active posture runtime state", async () => {
     const harness = fakeExtension(cwd);
 
-    await harness.run("agent");
+    await harness.run("orchestrator");
     await harness.run("state");
 
     const output = harness.messages.at(-1)!;
-    expect(output).toContain("posture: agent");
+    expect(output).toContain("posture: orchestrator");
     expect(output).toContain("Activation count: 1");
     expect(output).toContain("Last activated:");
   });
 
   it("/posture objective sets, shows, and clears the active posture objective", async () => {
     const harness = fakeExtension(cwd);
-    await harness.run("agent");
+    await harness.run("orchestrator");
     harness.appended.length = 0;
     harness.statusCalls.length = 0;
 
     await harness.run("objective Fix Parser BUG");
 
-    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: agent" });
-    expect(harness.messages.at(-1)).toBe("Objective set for posture: agent");
-    expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBe("Fix Parser BUG");
+    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: orchestrator" });
+    expect(harness.messages.at(-1)).toBe("Objective set for posture: orchestrator");
+    expect(__testing.getOrCreatePostureRuntimeState("orchestrator").objective).toBe("Fix Parser BUG");
     expect(harness.appended.at(-1)).toEqual({
       customType: "pi-posture-state",
       data: {
         states: expect.objectContaining({
-          agent: expect.objectContaining({ objective: "Fix Parser BUG" }),
+          orchestrator: expect.objectContaining({ objective: "Fix Parser BUG" }),
         }),
       },
     });
@@ -3237,34 +3240,34 @@ describe("command output compatibility", () => {
 
     harness.statusCalls.length = 0;
     await harness.run("objective CLEAR");
-    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: agent" });
-    expect(harness.messages.at(-1)).toBe("Objective cleared for posture: agent");
-    expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBeUndefined();
+    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: orchestrator" });
+    expect(harness.messages.at(-1)).toBe("Objective cleared for posture: orchestrator");
+    expect(__testing.getOrCreatePostureRuntimeState("orchestrator").objective).toBeUndefined();
 
     await harness.run("objective Another Goal");
     await harness.run("objective clear");
-    expect(harness.messages.at(-1)).toBe("Objective cleared for posture: agent");
-    expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBeUndefined();
+    expect(harness.messages.at(-1)).toBe("Objective cleared for posture: orchestrator");
+    expect(__testing.getOrCreatePostureRuntimeState("orchestrator").objective).toBeUndefined();
   });
 
   it("/posture clear-state resets active posture state and avoids duplicate no-op persistence", async () => {
     const harness = fakeExtension(cwd);
-    await harness.run("agent");
-    __testing.getOrCreatePostureRuntimeState("agent").objective = "Ship it";
+    await harness.run("orchestrator");
+    __testing.getOrCreatePostureRuntimeState("orchestrator").objective = "Ship it";
     harness.appended.length = 0;
     harness.statusCalls.length = 0;
 
     await harness.run("clear-state");
 
-    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: agent" });
-    expect(harness.messages.at(-1)).toBe("Cleared runtime state for posture: agent");
-    expect(__testing.getOrCreatePostureRuntimeState("agent")).toEqual({ activationCount: 0 });
+    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: orchestrator" });
+    expect(harness.messages.at(-1)).toBe("Cleared runtime state for posture: orchestrator");
+    expect(__testing.getOrCreatePostureRuntimeState("orchestrator")).toEqual({ activationCount: 0 });
     expect(harness.appended).toHaveLength(1);
     expect(harness.appended.at(-1)).toEqual({
       customType: "pi-posture-state",
       data: {
         states: expect.objectContaining({
-          agent: { activationCount: 0 },
+          orchestrator: { activationCount: 0 },
         }),
       },
     });
@@ -3308,11 +3311,11 @@ describe("command output compatibility", () => {
         customType: "pi-posture-state",
         data: {
           states: {
-            agent: { activationCount: 2, objective: "Review parser edge cases" },
+            orchestrator: { activationCount: 2, objective: "Review parser edge cases" },
           },
         },
       },
-      { type: "custom", customType: "posture", data: { id: "agent" } },
+      { type: "custom", customType: "posture", data: { id: "orchestrator" } },
     ];
     const harness = fakeExtension(cwd, { hasUI: true, branch });
 
@@ -3336,7 +3339,7 @@ describe("command output compatibility", () => {
     expect(harness.messages.at(-1)).toBe("Switched to posture: assist");
 
     await harness.run("autonomous");
-    expect(harness.messages.at(-1)).toBe("Switched to posture: agent");
+    expect(harness.messages.at(-1)).toBe("Switched to posture: orchestrator");
   });
 });
 
@@ -3348,14 +3351,14 @@ describe("buildPostureRegistry (pure)", () => {
   it("includes built-in postures and aliases with no configs", () => {
     const result = buildPostureRegistry([]);
     expect(result.postures.has("default")).toBe(true);
-    expect(result.postures.has("agent")).toBe(true);
+    expect(result.postures.has("orchestrator")).toBe(true);
     expect(result.postures.has("learn")).toBe(true);
     expect(result.postures.has("assist")).toBe(true);
     expect(result.postures.has("review")).toBe(true);
     expect(result.aliases.get("vanilla")).toBe("default");
     expect(result.aliases.get("teacher")).toBe("learn");
     expect(result.aliases.get("pair")).toBe("assist");
-    expect(result.aliases.get("autonomous")).toBe("agent");
+    expect(result.aliases.get("autonomous")).toBe("orchestrator");
     expect(result.configErrors).toEqual([]);
   });
 
@@ -3514,12 +3517,12 @@ describe("buildPostureRegistry (pure)", () => {
     expect(posture.policy?.type).toBe("static");
   });
 
-  it("adds policy to built-in postures from builder (agent is custom)", () => {
+  it("adds policy to built-in postures from builder (orchestrator is custom)", () => {
     const result = buildPostureRegistry([]);
     for (const posture of result.postures.values()) {
       expect(posture.policy).toBeDefined();
     }
-    expect(result.postures.get("agent")!.policy!.type).toBe("custom");
+    expect(result.postures.get("orchestrator")!.policy!.type).toBe("custom");
     expect(result.postures.get("assist")!.policy!.type).toBe("custom");
     expect(result.postures.get("learn")!.policy!.type).toBe("custom");
     expect(result.postures.get("review")!.policy!.type).toBe("custom");
