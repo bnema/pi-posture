@@ -12,7 +12,10 @@ type ContextPolicy = {
   project?: ContextDecision;
 };
 
-type Posture = {
+/** Declarative posture definition. Each posture is a named configuration
+ * that modifies Pi's behavior via prompt overlays, context policies,
+ * tool restrictions, and thinking levels. */
+type PostureDefinition = {
   id: string;
   label: string;
   description: string;
@@ -20,7 +23,16 @@ type Posture = {
   contextPolicy?: ContextPolicy;
   activeTools?: string[];
   thinking?: ThinkingLevel;
+  /** Reserved for future policy hooks. */
+  policy?: PosturePolicy;
 };
+
+/** Placeholder for runtime policy hooks (e.g. onActivate, context filters).
+ *  Adding optional fields here is backwards-compatible. */
+type PosturePolicy = {};
+
+/** Generic per-posture runtime state, reserved for session persistence. */
+type PostureRuntimeState = Record<string, unknown>;
 
 type SessionStartReason = "startup" | "reload" | "new" | "resume" | "fork";
 
@@ -33,7 +45,7 @@ type StartupPickerConfig = {
 };
 
 type PostureConfig = {
-  postures?: Record<string, Partial<Posture>>;
+  postures?: Record<string, Partial<PostureDefinition>>;
   aliases?: Record<string, string>;
   startupPicker?: Partial<StartupPickerConfig> | boolean;
 };
@@ -45,7 +57,7 @@ type ContextFilterReport = {
 
 type RuntimeState = {
   activePostureId: string;
-  postures: Map<string, Posture>;
+  postures: Map<string, PostureDefinition>;
   aliases: Map<string, string>;
   startupPicker: StartupPickerConfig;
   configErrors: string[];
@@ -66,7 +78,7 @@ const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   reasons: ["startup", "new", "resume", "fork"],
 };
 
-const BUILTIN_POSTURES: Posture[] = [
+const BUILTIN_POSTURES: PostureDefinition[] = [
   {
     id: "default",
     label: "Default",
@@ -249,7 +261,7 @@ function mergeStartupPicker(value: PostureConfig["startupPicker"], source: strin
   }
 }
 
-function normalizePosture(id: string, value: Partial<Posture>, source: string): Posture | undefined {
+function normalizePosture(id: string, value: Partial<PostureDefinition>, source: string): PostureDefinition | undefined {
   if (!isRecord(value)) {
     addConfigError(`${source}: posture must be an object`);
     return undefined;
@@ -295,7 +307,7 @@ function mergeConfig(config: PostureConfig | undefined, source: string) {
       for (const [rawId, rawPosture] of Object.entries(config.postures)) {
         const id = normalizeId(rawId);
         if (!id) continue;
-        const posture = normalizePosture(id, rawPosture as Partial<Posture>, `${source}.postures.${rawId}`);
+        const posture = normalizePosture(id, rawPosture as Partial<PostureDefinition>, `${source}.postures.${rawId}`);
         if (posture) state.postures.set(id, posture);
       }
     }
@@ -357,7 +369,7 @@ function resolvePostureId(input: string): string | undefined {
   return state.postures.has(resolved) ? resolved : undefined;
 }
 
-function activePosture(): Posture {
+function activePosture(): PostureDefinition {
   return state.postures.get(state.activePostureId) ?? state.postures.get("default")!;
 }
 
@@ -403,7 +415,7 @@ function restoreToolsAndThinking(pi: ExtensionAPI) {
   }
 }
 
-function validatedActiveTools(pi: ExtensionAPI, posture: Posture): string[] | undefined {
+function validatedActiveTools(pi: ExtensionAPI, posture: PostureDefinition): string[] | undefined {
   if (!posture.activeTools) return undefined;
   const knownTools = new Set(pi.getAllTools().map((tool) => tool.name));
   const valid = posture.activeTools.filter((tool) => knownTools.has(tool));
@@ -418,7 +430,7 @@ function validatedActiveTools(pi: ExtensionAPI, posture: Posture): string[] | un
   return valid;
 }
 
-function applyRuntime(pi: ExtensionAPI, ctx: ExtensionContext, posture: Posture) {
+function applyRuntime(pi: ExtensionAPI, ctx: ExtensionContext, posture: PostureDefinition) {
   if (posture.id === "default") {
     state.contextFilterReport = undefined;
     restoreToolsAndThinking(pi);
@@ -565,7 +577,7 @@ function filterProjectContext(systemPrompt: string, policy: ContextPolicy | unde
   });
 }
 
-function addPromptOverlay(systemPrompt: string, posture: Posture, options?: BuildSystemPromptOptions): string {
+function addPromptOverlay(systemPrompt: string, posture: PostureDefinition, options?: BuildSystemPromptOptions): string {
   const filtered = filterProjectContext(systemPrompt, posture.contextPolicy, options);
   if (!posture.promptOverlay) return filtered;
   return `${filtered}\n\n<pi_posture id="${posture.id}">\n${posture.promptOverlay}\n</pi_posture>`;
@@ -591,31 +603,31 @@ function restorePostureFromSession(ctx: ExtensionContext): boolean {
   return found;
 }
 
-function selectableStartupPostures(): Posture[] {
+function selectableStartupPostures(): PostureDefinition[] {
   return state.startupPicker.include
     .map(resolvePostureId)
     .filter((id): id is string => !!id)
     .map((id) => state.postures.get(id))
-    .filter((posture): posture is Posture => !!posture);
+    .filter((posture): posture is PostureDefinition => !!posture);
 }
 
-function postureLabel(posture: Posture): string {
+function postureLabel(posture: PostureDefinition): string {
   return `${posture.id} — ${posture.description}`;
 }
 
 async function selectPosture(
   ctx: ExtensionContext,
   title: string,
-  postures: Posture[],
+  postures: PostureDefinition[],
   timeoutMs?: number,
-): Promise<Posture | undefined> {
+): Promise<PostureDefinition | undefined> {
   const labels = postures.map(postureLabel);
   const choice = await ctx.ui.select(title, labels, { timeout: timeoutMs });
   const index = labels.indexOf(choice ?? "");
   return index >= 0 ? postures[index] : undefined;
 }
 
-function switchPosture(pi: ExtensionAPI, ctx: ExtensionContext, posture: Posture) {
+function switchPosture(pi: ExtensionAPI, ctx: ExtensionContext, posture: PostureDefinition) {
   state.activePostureId = posture.id;
   applyRuntime(pi, ctx, posture);
   rememberPosture(pi, posture.id);
