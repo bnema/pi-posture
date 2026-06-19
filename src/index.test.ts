@@ -1070,10 +1070,31 @@ describe("policy hook dispatch", () => {
       systemPromptOptions: { cwd: "/tmp" },
     });
 
-    // Handler still returns { systemPrompt } — just no overlay or hook calls
+    // Default posture: returns undefined, no overlay, no hook calls
     expect(results).toHaveLength(1);
-    expect(results[0]).toEqual({ systemPrompt: "base" });
+    expect(results[0]).toBeUndefined();
     expect(policy.onBeforeAgentStart).not.toHaveBeenCalled();
+  });
+
+  it("before_agent_start returns undefined when custom posture without overlay and hook does not modify prompt", async () => {
+    const policy = createCustomPolicy();
+    policy.onBeforeAgentStart.mockReturnValue(undefined);
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("no-overlay", policy);
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    // Hook was called (posture is active) but returned no systemPrompt,
+    // and posture has no overlay → no change → undefined
+    expect(result).toBeUndefined();
+    expect(policy.onBeforeAgentStart).toHaveBeenCalledTimes(1);
   });
 
   // ---- input ----
@@ -1937,14 +1958,8 @@ describe("agent built-in policy", () => {
     const result = results.find(
       (r: any) => r && "systemPrompt" in r,
     ) as { systemPrompt: string } | undefined;
-    expect(result).toBeDefined();
-    // No agent overlay or dynamic guidance
-    expect(result!.systemPrompt).not.toContain('<pi_posture id="agent">');
-    expect(result!.systemPrompt).not.toContain("Agent Guidance");
-    expect(result!.systemPrompt).not.toContain("forward progress");
-    expect(result!.systemPrompt).not.toContain("blocked");
-    // Plain base
-    expect(result!.systemPrompt).toBe("base prompt");
+    // Default posture returns undefined before_agent_start, no overlay or dynamic guidance
+    expect(result).toBeUndefined();
   });
 
   it("agent onBeforeAgentStart is not invoked when inactive", async () => {
@@ -2114,15 +2129,8 @@ describe("assist built-in policy", () => {
     const result = results.find(
       (r: any) => r && "systemPrompt" in r,
     ) as { systemPrompt: string } | undefined;
-    expect(result).toBeDefined();
-    // No assist overlay or dynamic guidance
-    expect(result!.systemPrompt).not.toContain('<pi_posture id="assist">');
-    expect(result!.systemPrompt).not.toContain("Assist Guidance");
-    expect(result!.systemPrompt).not.toContain("primary implementer");
-    expect(result!.systemPrompt).not.toContain("narrow");
-    expect(result!.systemPrompt).not.toContain("broad edits");
-    // Plain base
-    expect(result!.systemPrompt).toBe("base prompt");
+    // Default posture returns undefined before_agent_start, no overlay or dynamic guidance
+    expect(result).toBeUndefined();
   });
 
   it("assist dynamic guidance is absent when another non-assist posture is active", async () => {
@@ -2325,14 +2333,8 @@ describe("review built-in policy", () => {
     const result = results.find(
       (r: any) => r && "systemPrompt" in r,
     ) as { systemPrompt: string } | undefined;
-    expect(result).toBeDefined();
-    // No review overlay or dynamic guidance
-    expect(result!.systemPrompt).not.toContain('<pi_posture id="review">');
-    expect(result!.systemPrompt).not.toContain("Review Guidance");
-    expect(result!.systemPrompt).not.toContain("evidence-first approach");
-    expect(result!.systemPrompt).not.toContain("file and line evidence");
-    // Plain base
-    expect(result!.systemPrompt).toBe("base prompt");
+    // Default posture returns undefined before_agent_start, no overlay or dynamic guidance
+    expect(result).toBeUndefined();
   });
 
   it("review dynamic guidance is absent when another non-review posture is active", async () => {
@@ -2582,14 +2584,8 @@ describe("learn built-in policy", () => {
     const result = results.find(
       (r: any) => r && "systemPrompt" in r,
     ) as { systemPrompt: string } | undefined;
-    expect(result).toBeDefined();
-    // No learn overlay or dynamic guidance
-    expect(result!.systemPrompt).not.toContain('<pi_posture id="learn">');
-    expect(result!.systemPrompt).not.toContain("Learn Guidance");
-    expect(result!.systemPrompt).not.toContain("hint-first");
-    expect(result!.systemPrompt).not.toContain("Socratic");
-    // Plain base
-    expect(result!.systemPrompt).toBe("base prompt");
+    // Default posture returns undefined before_agent_start, no overlay or dynamic guidance
+    expect(result).toBeUndefined();
   });
 
   it("learn dynamic guidance is absent when another non-learn posture is active", async () => {

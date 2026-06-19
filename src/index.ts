@@ -830,7 +830,11 @@ export default function piPosture(pi: ExtensionAPI) {
       }
     }
 
-    return { systemPrompt };
+    // Only return { systemPrompt } if the prompt was actually modified
+    if (systemPrompt !== event.systemPrompt) {
+      return { systemPrompt };
+    }
+    return undefined;
   });
 
   pi.on("input", (event) => {
