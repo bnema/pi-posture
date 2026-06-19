@@ -101,6 +101,7 @@ describe("pi-posture internals", () => {
     __testing.runtimeState.thinkingSnapshot = undefined;
     __testing.runtimeState.appliedThinkingOverride = undefined;
     __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
   });
 
   afterEach(() => {
@@ -608,6 +609,93 @@ describe("pi-posture internals", () => {
       const stored = __testing.getRegistryState().postures.get(builtIn.id)!;
       expect(stored.promptOverlay).toBe(builtIn.promptOverlay);
     }
+  });
+
+  // ============================================================
+  // Per-posture runtime state (Phase 2 Task 5)
+  // ============================================================
+
+  it("restores runtime state from a session branch pi-posture-state custom entry", () => {
+    const branch = [
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: {
+          states: {
+            agent: { activationCount: 3, lastActivatedAt: 1234 },
+          },
+        },
+      },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    const state = __testing.getOrCreatePostureRuntimeState("agent");
+    expect(state.activationCount).toBe(3);
+    expect(state.lastActivatedAt).toBe(1234);
+  });
+
+  it("later runtime state entries override earlier ones", () => {
+    const branch = [
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: {
+          states: {
+            agent: { activationCount: 1, lastActivatedAt: 100 },
+          },
+        },
+      },
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: {
+          states: {
+            agent: { activationCount: 5, lastActivatedAt: 500 },
+          },
+        },
+      },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    const state = __testing.getOrCreatePostureRuntimeState("agent");
+    expect(state.activationCount).toBe(5);
+    expect(state.lastActivatedAt).toBe(500);
+  });
+
+  it("switching a posture persists both active posture entry and hidden runtime state entry", async () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        focused: { description: "Focused", activeTools: ["read"] },
+      },
+    });
+    const harness = fakeExtension(cwd);
+    await harness.run("focused");
+
+    const postureEntry = harness.appended.find(
+      (e) => e.customType === "posture",
+    );
+    expect(postureEntry).toBeDefined();
+    expect((postureEntry!.data as any).id).toBe("focused");
+
+    const stateEntry = harness.appended.find(
+      (e) => e.customType === "pi-posture-state",
+    );
+    expect(stateEntry).toBeDefined();
+    const states = (stateEntry!.data as any).states;
+    expect(states.focused).toBeDefined();
+    expect(states.focused.activationCount).toBe(1);
+    expect(typeof states.focused.lastActivatedAt).toBe("number");
+  });
+
+  it("existing restorePostureFromSession still works with old posture entries", () => {
+    const branch = [
+      { type: "custom", customType: "posture", data: { id: "learn" } },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.runtimeState.activePostureId = "default";
+    const restored = __testing.restorePostureFromSession(ctx);
+    expect(restored).toBe(true);
+    expect(__testing.runtimeState.activePostureId).toBe("learn");
   });
 });
 

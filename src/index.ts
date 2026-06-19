@@ -17,6 +17,7 @@ import {
 import type {
   ContextPolicy,
   PostureDefinition,
+  PostureRuntimeState,
   SessionStartReason,
   ThinkingLevel,
 } from "./posture-registry.js";
@@ -53,6 +54,47 @@ const MESSAGE_TYPE = "pi-posture";
 const runtimeState: RuntimeState = {
   activePostureId: "default",
 };
+
+// ============================================================
+// Per-Posture Runtime State (persisted via session entries)
+// ============================================================
+
+const postureRuntimeStates: Map<string, PostureRuntimeState> = new Map();
+
+function getOrCreatePostureRuntimeState(id: string): PostureRuntimeState {
+  let state = postureRuntimeStates.get(id);
+  if (!state) {
+    state = { activationCount: 0 };
+    postureRuntimeStates.set(id, state);
+  }
+  return state;
+}
+
+function persistPostureRuntimeState(pi: ExtensionAPI): void {
+  const states: Record<string, PostureRuntimeState> = {};
+  for (const [id, state] of postureRuntimeStates) {
+    states[id] = { ...state };
+  }
+  if (Object.keys(states).length > 0) {
+    pi.appendEntry("pi-posture-state", { states });
+  }
+}
+
+function restorePostureRuntimeState(ctx: ExtensionContext): void {
+  postureRuntimeStates.clear();
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type === "custom" && entry.customType === "pi-posture-state") {
+      const data = entry.data as
+        | { states?: Record<string, PostureRuntimeState> }
+        | undefined;
+      if (data?.states) {
+        for (const [id, state] of Object.entries(data.states)) {
+          postureRuntimeStates.set(id, state);
+        }
+      }
+    }
+  }
+}
 
 // ============================================================
 // Runtime Helper Functions
@@ -426,6 +468,11 @@ function switchPosture(
   runtimeState.activePostureId = posture.id;
   applyRuntime(pi, ctx, posture);
   rememberPosture(pi, posture.id);
+  // Update per-posture runtime state
+  const state = getOrCreatePostureRuntimeState(posture.id);
+  state.lastActivatedAt = Date.now();
+  state.activationCount += 1;
+  persistPostureRuntimeState(pi);
   pi.sendMessage({
     customType: MESSAGE_TYPE,
     content: `Switched to ${postureSummary(posture)}`,
@@ -493,6 +540,12 @@ export const __testing = {
 
   // Runtime state (mutable, for direct test manipulation)
   runtimeState,
+
+  // Per-posture runtime state (mutable for test inspection)
+  postureRuntimeStates,
+  getOrCreatePostureRuntimeState,
+  persistPostureRuntimeState,
+  restorePostureRuntimeState,
 
   // Runtime functions
   activePosture,
@@ -602,6 +655,7 @@ export default function piPosture(pi: ExtensionAPI) {
     registryLoadPostures(ctx.cwd);
     ensureActivePostureExists();
     const hasSessionPosture = restorePostureFromSession(ctx);
+    restorePostureRuntimeState(ctx);
     applyRuntime(pi, ctx, activePosture());
     await maybePromptStartupPosture(
       pi,
