@@ -180,6 +180,8 @@ export type PostureRuntimeState = {
   activationCount: number;
   /** Number of turns observed while this posture was active (via onTurnEnd). */
   turnsInSession?: number;
+  /** Optional user-supplied objective scoped to this posture. */
+  objective?: string;
 };
 
 export type SessionStartReason = "startup" | "reload" | "new" | "resume" | "fork";

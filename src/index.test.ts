@@ -760,9 +760,9 @@ describe("pi-posture internals", () => {
   });
 
   it("sanitizePostureRuntimeState accepts valid inputs and returns fresh objects", () => {
-    const raw = { activationCount: 5, lastActivatedAt: 1000, extraField: "ignored" };
+    const raw = { activationCount: 5, lastActivatedAt: 1000, objective: "Fix parser bug", extraField: "ignored" };
     const result = __testing.sanitizePostureRuntimeState(raw);
-    expect(result).toEqual({ activationCount: 5, lastActivatedAt: 1000 });
+    expect(result).toEqual({ activationCount: 5, lastActivatedAt: 1000, objective: "Fix parser bug" });
     // Fresh object, not the same reference
     expect(result).not.toBe(raw);
     // Minimal (only required field)
@@ -3097,6 +3097,68 @@ describe("command output compatibility", () => {
     expect(output).toContain("Active posture: learn (Learn)");
     expect(output).toContain("Prompt overlay: yes");
     expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+  });
+
+  it("/posture state displays active posture runtime state", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("agent");
+    await harness.run("state");
+
+    const output = harness.messages.at(-1)!;
+    expect(output).toContain("posture: agent");
+    expect(output).toContain("Activation count: 1");
+    expect(output).toContain("Last activated:");
+  });
+
+  it("/posture objective sets, shows, and clears the active posture objective", async () => {
+    const harness = fakeExtension(cwd);
+    await harness.run("agent");
+    harness.appended.length = 0;
+
+    await harness.run("objective Fix Parser BUG");
+
+    expect(harness.messages.at(-1)).toBe("Objective set for posture: agent");
+    expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBe("Fix Parser BUG");
+    expect(harness.appended.at(-1)).toEqual({
+      customType: "pi-posture-state",
+      data: {
+        states: expect.objectContaining({
+          agent: expect.objectContaining({ objective: "Fix Parser BUG" }),
+        }),
+      },
+    });
+
+    await harness.run("objective");
+    expect(harness.messages.at(-1)).toContain("Objective: Fix Parser BUG");
+
+    await harness.run("objective clear");
+    expect(harness.messages.at(-1)).toBe("Objective cleared for posture: agent");
+    expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBeUndefined();
+  });
+
+  it("/posture clear-state resets active posture state and avoids duplicate no-op persistence", async () => {
+    const harness = fakeExtension(cwd);
+    await harness.run("agent");
+    __testing.getOrCreatePostureRuntimeState("agent").objective = "Ship it";
+    harness.appended.length = 0;
+
+    await harness.run("clear-state");
+
+    expect(harness.messages.at(-1)).toBe("Cleared runtime state for posture: agent");
+    expect(__testing.getOrCreatePostureRuntimeState("agent")).toEqual({ activationCount: 0 });
+    expect(harness.appended).toHaveLength(1);
+    expect(harness.appended.at(-1)).toEqual({
+      customType: "pi-posture-state",
+      data: {
+        states: expect.objectContaining({
+          agent: { activationCount: 0 },
+        }),
+      },
+    });
+
+    await harness.run("clear-state");
+    expect(harness.appended).toHaveLength(1);
   });
 
   it("switching via alias works and emits correct status output", async () => {

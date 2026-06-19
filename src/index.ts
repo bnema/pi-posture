@@ -115,7 +115,7 @@ function snapshotPostureRuntimeStates(): string {
 
 function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null {
   if (!isRecord(value)) return null;
-  const { activationCount, lastActivatedAt, turnsInSession } = value as Record<string, unknown>;
+  const { activationCount, lastActivatedAt, turnsInSession, objective } = value as Record<string, unknown>;
   if (typeof activationCount !== "number" || !Number.isFinite(activationCount)) return null;
   if (lastActivatedAt !== undefined && (typeof lastActivatedAt !== "number" || !Number.isFinite(lastActivatedAt))) return null;
   if (turnsInSession !== undefined) {
@@ -130,6 +130,7 @@ function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null
   const result: PostureRuntimeState = { activationCount };
   if (lastActivatedAt !== undefined) result.lastActivatedAt = lastActivatedAt;
   if (turnsInSession !== undefined) result.turnsInSession = turnsInSession;
+  if (typeof objective === "string" && objective.length > 0) result.objective = objective;
   return result;
 }
 
@@ -171,6 +172,69 @@ function postureSummary(posture = activePosture()): string {
   if (posture.contextPolicy?.project === "suppress")
     suppressed.push("project ctx suppressed");
   return [`posture: ${posture.id}`, ...suppressed].join(" · ");
+}
+
+function formatTimestamp(value: number | undefined): string {
+  return value === undefined ? "—" : new Date(value).toISOString();
+}
+
+function stateText(activeId = runtimeState.activePostureId): string {
+  const state = postureRuntimeStates.get(activeId) ?? { activationCount: 0 };
+  const lines = [
+    `posture: ${activeId}`,
+    `  Activation count: ${state.activationCount}`,
+  ];
+  if (state.turnsInSession !== undefined) {
+    lines.push(`  Turns this session: ${state.turnsInSession}`);
+  }
+  if (state.lastActivatedAt !== undefined) {
+    lines.push(`  Last activated: ${formatTimestamp(state.lastActivatedAt)}`);
+  }
+  if (state.objective !== undefined) {
+    lines.push(`  Objective: ${state.objective}`);
+  }
+  return lines.join("\n");
+}
+
+function isInitialPostureRuntimeState(state: PostureRuntimeState | undefined): boolean {
+  return (
+    state === undefined ||
+    (state.activationCount === 0 &&
+      state.lastActivatedAt === undefined &&
+      state.turnsInSession === undefined &&
+      state.objective === undefined)
+  );
+}
+
+function clearRuntimeState(pi: ExtensionAPI): void {
+  const id = runtimeState.activePostureId;
+  const existing = postureRuntimeStates.get(id);
+  if (isInitialPostureRuntimeState(existing)) return;
+  const before = snapshotPostureRuntimeStates();
+  postureRuntimeStates.set(id, { activationCount: 0 });
+  persistIfChanged(pi, before);
+}
+
+function objectiveText(): string {
+  const id = runtimeState.activePostureId;
+  const objective = postureRuntimeStates.get(id)?.objective;
+  if (!objective) return `posture: ${id}\n  (no objective set)`;
+  return `posture: ${id}\n  Objective: ${objective}`;
+}
+
+function setPostureObjective(pi: ExtensionAPI, text: string): void {
+  const before = snapshotPostureRuntimeStates();
+  const state = getOrCreatePostureRuntimeState(runtimeState.activePostureId);
+  state.objective = text;
+  persistIfChanged(pi, before);
+}
+
+function clearPostureObjective(pi: ExtensionAPI): void {
+  const state = postureRuntimeStates.get(runtimeState.activePostureId);
+  if (!state?.objective) return;
+  const before = snapshotPostureRuntimeStates();
+  delete state.objective;
+  persistIfChanged(pi, before);
 }
 
 function updatePostureUi(pi: ExtensionAPI, ctx: ExtensionContext): void {
@@ -724,6 +788,11 @@ export const __testing = {
   callPolicyHookAndPersist,
   snapshotPostureRuntimeStates,
   sanitizePostureRuntimeState,
+  stateText,
+  clearRuntimeState,
+  objectiveText,
+  setPostureObjective,
+  clearPostureObjective,
 
   // Test helpers
   setPostureDefinition(id: string, def: PostureDefinition) {
@@ -750,6 +819,9 @@ export default function piPosture(pi: ExtensionAPI) {
         "list",
         "status",
         "inspect",
+        "state",
+        "clear-state",
+        "objective",
         ...reg.postures.keys(),
         ...reg.aliases.keys(),
       ].sort();
@@ -759,6 +831,7 @@ export default function piPosture(pi: ExtensionAPI) {
     },
     handler: async (args, ctx) => {
       reloadAndReconcile(pi, ctx);
+      const trimmed = args.trim();
       const arg = normalizeId(args);
 
       if (!arg) {
@@ -801,6 +874,50 @@ export default function piPosture(pi: ExtensionAPI) {
         pi.sendMessage({
           customType: MESSAGE_TYPE,
           content: inspectText(),
+          display: true,
+        });
+        return;
+      }
+      if (arg === "state") {
+        pi.sendMessage({
+          customType: MESSAGE_TYPE,
+          content: stateText(),
+          display: true,
+        });
+        return;
+      }
+      if (arg === "clear-state") {
+        clearRuntimeState(pi);
+        pi.sendMessage({
+          customType: MESSAGE_TYPE,
+          content: `Cleared runtime state for posture: ${runtimeState.activePostureId}`,
+          display: true,
+        });
+        return;
+      }
+      if (arg === "objective" || arg.startsWith("objective ")) {
+        const rest = trimmed.slice("objective".length).trim();
+        if (!rest || rest === "show") {
+          pi.sendMessage({
+            customType: MESSAGE_TYPE,
+            content: objectiveText(),
+            display: true,
+          });
+          return;
+        }
+        if (rest === "clear" || rest === "--clear") {
+          clearPostureObjective(pi);
+          pi.sendMessage({
+            customType: MESSAGE_TYPE,
+            content: `Objective cleared for posture: ${runtimeState.activePostureId}`,
+            display: true,
+          });
+          return;
+        }
+        setPostureObjective(pi, rest);
+        pi.sendMessage({
+          customType: MESSAGE_TYPE,
+          content: `Objective set for posture: ${runtimeState.activePostureId}`,
           display: true,
         });
         return;
