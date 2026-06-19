@@ -3161,6 +3161,56 @@ describe("command output compatibility", () => {
     expect(harness.appended).toHaveLength(1);
   });
 
+  it("/posture state works in UI and non-UI contexts without opening the picker", async () => {
+    const uiHarness = fakeExtension(cwd, { hasUI: true });
+    await uiHarness.run("state");
+    expect(uiHarness.messages.at(-1)).toContain("posture: default");
+    expect(uiHarness.selectCalls).toEqual([]);
+
+    const headlessHarness = fakeExtension(cwd, { hasUI: false });
+    await headlessHarness.run("state");
+    expect(headlessHarness.messages.at(-1)).toContain("posture: default");
+    expect(headlessHarness.selectCalls).toEqual([]);
+  });
+
+  it("default posture state commands are no-op when no state changes", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("objective");
+    await harness.run("objective clear");
+    await harness.run("clear-state");
+
+    expect(harness.messages).toEqual([
+      "posture: default\n  (no objective set)",
+      "Objective cleared for posture: default",
+      "Cleared runtime state for posture: default",
+    ]);
+    expect(harness.appended).toEqual([]);
+    expect(__testing.getOrCreatePostureRuntimeState("default")).toEqual({ activationCount: 0 });
+  });
+
+  it("persisted objective restores and displays in a UI context", async () => {
+    const branch = [
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: {
+          states: {
+            agent: { activationCount: 2, objective: "Review parser edge cases" },
+          },
+        },
+      },
+      { type: "custom", customType: "posture", data: { id: "agent" } },
+    ];
+    const harness = fakeExtension(cwd, { hasUI: true, branch });
+
+    await harness.emit("session_start", { type: "session_start", reason: "resume" });
+    await harness.run("state");
+
+    expect(harness.messages.at(-1)).toContain("Objective: Review parser edge cases");
+    expect(harness.selectCalls).toEqual([]);
+  });
+
   it("switching via alias works and emits correct status output", async () => {
     const harness = fakeExtension(cwd);
 
