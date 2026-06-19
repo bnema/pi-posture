@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   addConfigError,
+  CONFIG_DIR_NAME,
   getRegistryState,
   isRecord,
   loadPostures as registryLoadPostures,
@@ -686,6 +687,9 @@ function callPolicyHookAndPersist(
 // ============================================================
 
 export const __testing = {
+  // Constants
+  CONFIG_DIR_NAME,
+
   // Registry functions
   resetRegistry,
   loadPostures: registryLoadPostures,
@@ -819,6 +823,10 @@ export default function piPosture(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    // TODO: Gate project config with ctx.isProjectTrusted() when available.
+    // Passing { loadProjectConfig: ctx.isProjectTrusted?.() ?? true } would
+    // skip project-local postures.json for untrusted projects while still
+    // loading the global config.
     registryLoadPostures(ctx.cwd);
     ensureActivePostureExists();
     const hasSessionPosture = restorePostureFromSession(ctx);

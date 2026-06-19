@@ -45,6 +45,8 @@ Optional config files:
 .pi/postures.json
 ```
 
+`.pi` is the default project config directory (CONFIG_DIR_NAME). This matches Pi's standard project config directory for extensions.
+
 Project config overrides global config. Config errors do not break Pi startup; use `/posture inspect` to see effective overlay details.
 
 Example:

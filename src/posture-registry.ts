@@ -3,6 +3,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ============================================================
+// Pi Config Directory Name
+// ============================================================
+
+/**
+ * Directory name for Pi project configuration files (`postures.json`).
+ * Mirrors CONFIG_DIR_NAME from @earendil-works/pi-coding-agent (not exported
+ * from main index in the installed version). When the dependency is updated,
+ * this can be replaced with an import from the package.
+ */
+export const CONFIG_DIR_NAME = ".pi";
+
+// ============================================================
 // Types
 // ============================================================
 
@@ -809,21 +821,25 @@ export function resolvePostureId(input: string): string | undefined {
   return internalState.postures.has(resolved) ? resolved : undefined;
 }
 
-export function loadPostures(cwd: string): void {
-  const [globalResult, projectResult] = [
-    readConfig(join(getAgentDir(), "postures.json")),
-    readConfig(resolve(cwd, ".pi", "postures.json")),
-  ];
+export function loadPostures(
+  cwd: string,
+  options?: { loadProjectConfig?: boolean },
+): void {
+  const globalConfig = readConfig(join(getAgentDir(), "postures.json"));
+  const projectConfig =
+    options?.loadProjectConfig !== false
+      ? readConfig(resolve(cwd, CONFIG_DIR_NAME, "postures.json"))
+      : { config: undefined, errors: [] };
   const result = buildPostureRegistry(
-    [globalResult.config, projectResult.config],
+    [globalConfig.config, projectConfig.config],
     ["global config", "project config"],
   );
   internalState.postures = result.postures;
   internalState.aliases = result.aliases;
   internalState.startupPicker = result.startupPicker;
   internalState.configErrors = [
-    ...globalResult.errors,
-    ...projectResult.errors,
+    ...globalConfig.errors,
+    ...projectConfig.errors,
     ...result.configErrors,
   ];
 }

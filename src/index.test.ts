@@ -4,16 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import piPosture, { __testing } from "./index.js";
-import { BUILTIN_POSTURES, buildPostureRegistry } from "./posture-registry.js";
+import { BUILTIN_POSTURES, CONFIG_DIR_NAME, buildPostureRegistry } from "./posture-registry.js";
 
 function tempProject() {
   const cwd = mkdtempSync(join(tmpdir(), "pi-posture-"));
-  mkdirSync(join(cwd, ".pi"));
+  mkdirSync(join(cwd, CONFIG_DIR_NAME));
   return cwd;
 }
 
 function writeProjectConfig(cwd: string, config: unknown) {
-  writeFileSync(join(cwd, ".pi", "postures.json"), JSON.stringify(config), "utf8");
+  writeFileSync(join(cwd, CONFIG_DIR_NAME, "postures.json"), JSON.stringify(config), "utf8");
 }
 
 function projectContext(path: string, content: string) {
@@ -118,7 +118,7 @@ describe("pi-posture internals", () => {
   // ============================================================
 
   it("preserves parse/root config file errors through loadPostures", () => {
-    writeFileSync(join(cwd, ".pi", "postures.json"), "not valid json", "utf8");
+    writeFileSync(join(cwd, CONFIG_DIR_NAME, "postures.json"), "not valid json", "utf8");
     __testing.loadPostures(cwd);
     const text = __testing.inspectText();
     expect(text).toContain("postures.json: Unexpected token");
@@ -126,7 +126,7 @@ describe("pi-posture internals", () => {
   });
 
   it("preserves non-object root config file error through loadPostures", () => {
-    writeFileSync(join(cwd, ".pi", "postures.json"), JSON.stringify([]), "utf8");
+    writeFileSync(join(cwd, CONFIG_DIR_NAME, "postures.json"), JSON.stringify([]), "utf8");
     __testing.loadPostures(cwd);
     const text = __testing.inspectText();
     expect(text).toContain("postures.json: root must be an object");
@@ -134,7 +134,7 @@ describe("pi-posture internals", () => {
   });
 
   it("preserves parse error alongside builder validation errors", () => {
-    writeFileSync(join(cwd, ".pi", "postures.json"), "{ invalid json", "utf8");
+    writeFileSync(join(cwd, CONFIG_DIR_NAME, "postures.json"), "{ invalid json", "utf8");
     __testing.loadPostures(cwd);
     const text = __testing.inspectText();
     expect(text).toContain("postures.json:");
@@ -834,6 +834,69 @@ describe("pi-posture internals", () => {
     expect(text).toContain("Answer policy: none");
     expect(text).toContain("Status label: none");
     expect(text).toContain("Dynamic prompt: none");
+  });
+
+  // ============================================================
+  // CONFIG_DIR_NAME and trust gating (Phase 4 Task 15)
+  // ============================================================
+
+  it("CONFIG_DIR_NAME constant is '.pi'", () => {
+    expect(CONFIG_DIR_NAME).toBe(".pi");
+  });
+
+  it("loadPostures uses CONFIG_DIR_NAME for project config path", () => {
+    // Create project config in the CONFIG_DIR_NAME location
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Project posture via CONFIG_DIR_NAME" },
+      },
+    });
+    __testing.loadPostures(cwd);
+    expect(__testing.getRegistryState().postures.has("custom")).toBe(true);
+    const custom = __testing.getRegistryState().postures.get("custom")!;
+    expect(custom.description).toBe("Project posture via CONFIG_DIR_NAME");
+  });
+
+  it("loadProjectConfig: false skips project config while loading global config", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Should not load" },
+      },
+    });
+
+    __testing.loadPostures(cwd, { loadProjectConfig: false });
+
+    expect(__testing.getRegistryState().postures.has("custom")).toBe(false);
+    // Global config still loads (no file = no errors for global)
+    expect(__testing.getRegistryState().configErrors).toEqual([]);
+  });
+
+  it("loadProjectConfig: false prevents project config parse errors from surfacing", () => {
+    writeFileSync(join(cwd, CONFIG_DIR_NAME, "postures.json"), "{ invalid", "utf8");
+
+    __testing.loadPostures(cwd, { loadProjectConfig: false });
+
+    expect(__testing.getRegistryState().configErrors).toEqual([]);
+  });
+
+  it("loadProjectConfig defaults to true (backward compatible)", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Loads by default" },
+      },
+    });
+
+    __testing.loadPostures(cwd);
+    expect(__testing.getRegistryState().postures.has("custom")).toBe(true);
+    expect(__testing.getRegistryState().postures.get("custom")!.description).toBe(
+      "Loads by default",
+    );
+  });
+
+  it("global config errors still harmless when loadProjectConfig is false", () => {
+    const reg = __testing.getRegistryState();
+    // loadProjectConfig: false does not itself inject errors
+    expect(reg.configErrors).toEqual([]);
   });
 });
 
