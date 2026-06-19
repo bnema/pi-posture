@@ -2,7 +2,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import piPosture, { __testing } from "./index.js";
 import { BUILTIN_POSTURES, buildPostureRegistry } from "./posture-registry.js";
 
@@ -696,6 +696,492 @@ describe("pi-posture internals", () => {
     const restored = __testing.restorePostureFromSession(ctx);
     expect(restored).toBe(true);
     expect(__testing.runtimeState.activePostureId).toBe("learn");
+  });
+});
+
+// ============================================================
+// Policy hook dispatch tests (Phase 2 Task 6)
+// ============================================================
+
+describe("policy hook dispatch", () => {
+  beforeEach(() => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
+  });
+
+  function createCustomPolicy() {
+    return {
+      type: "custom" as const,
+      onBeforeActivate: vi.fn(),
+      onActivate: vi.fn(),
+      onDeactivate: vi.fn(),
+      onBeforeAgentStart: vi.fn(),
+      onInput: vi.fn(),
+      onToolCall: vi.fn(),
+      onToolResult: vi.fn(),
+      onTurnEnd: vi.fn(),
+      onAgentEnd: vi.fn(),
+      onSessionStart: vi.fn(),
+      onSessionShutdown: vi.fn(),
+    };
+  }
+
+  /** Register a custom posture with a policy in the registry and activate it.
+   *  Must be called after creating a fakeExtension harness since resetRegistry()
+   *  wipes custom entries. */
+  function installAndActivate(id: string, policy: ReturnType<typeof createCustomPolicy>) {
+    __testing.setPostureDefinition(id, {
+      id,
+      label: id.charAt(0).toUpperCase() + id.slice(1),
+      description: `Custom ${id} posture`,
+      policy,
+    });
+    __testing.runtimeState.activePostureId = id;
+  }
+
+  // ---- before_agent_start ----
+
+  it("before_agent_start hook appends system prompt for active custom posture", () => {
+    const policy = createCustomPolicy();
+    policy.onBeforeAgentStart.mockReturnValue({ systemPrompt: "policy-extra" });
+    installAndActivate("guided", policy);
+
+    const result = __testing.callPolicyHook(policy.onBeforeAgentStart, {
+      prompt: "hello",
+      systemPrompt: "original",
+    });
+
+    expect(policy.onBeforeAgentStart).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ systemPrompt: "policy-extra" });
+  });
+
+  it("before_agent_start hook chains with static overlay through event handler", async () => {
+    const policy = createCustomPolicy();
+    policy.onBeforeAgentStart.mockReturnValue({ systemPrompt: "policy-overlay" });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // The overlay gets appended, then the policy hook result is chained
+    expect(result!.systemPrompt).toContain("base");
+    expect(result!.systemPrompt).toContain("policy-overlay");
+    expect(policy.onBeforeAgentStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("before_agent_start hook does not erase static overlay when it returns undefined", async () => {
+    const policy = createCustomPolicy();
+    policy.onBeforeAgentStart.mockReturnValue(undefined);
+
+    const harness = fakeExtension("/tmp");
+    // Use a posture with a promptOverlay so we can verify the static overlay survives
+    __testing.setPostureDefinition("guided", {
+      id: "guided",
+      label: "Guided",
+      description: "Guided posture",
+      promptOverlay: "You are in guided posture.",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "guided";
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("base");
+    // Overlay is still added (non-default posture)
+    expect(result!.systemPrompt).toContain('<pi_posture id="guided">');
+  });
+
+  it("before_agent_start handler does not call policy hooks for default/static posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    // Don't install/activate the custom policy — stay on default
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    // Handler still returns { systemPrompt } — just no overlay or hook calls
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({ systemPrompt: "base" });
+    expect(policy.onBeforeAgentStart).not.toHaveBeenCalled();
+  });
+
+  // ---- input ----
+
+  it("input hook can mark input as handled for active custom posture", async () => {
+    const policy = createCustomPolicy();
+    policy.onInput.mockReturnValue({ action: "handled" });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    const results = await harness.emit("input", {
+      type: "input",
+      text: "user message",
+      source: "interactive",
+    });
+
+    expect(policy.onInput).toHaveBeenCalledTimes(1);
+    expect(policy.onInput).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+      expect.objectContaining({ text: "user message" }),
+    );
+    const handledResult = results.find(
+      (r: any) => r && r.action === "handled",
+    );
+    expect(handledResult).toBeDefined();
+  });
+
+  it("input hook is not called for inactive posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    // activePostureId is still "default"
+    await harness.emit("input", {
+      type: "input",
+      text: "user message",
+      source: "interactive",
+    });
+
+    expect(policy.onInput).not.toHaveBeenCalled();
+  });
+
+  it("input hook is not called for default/static posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+    const results = await harness.emit("input", {
+      type: "input",
+      text: "user message",
+      source: "interactive",
+    });
+
+    // For default/static posture, handler returns undefined (no hook action)
+    expect(results.every((r: any) => r === undefined)).toBe(true);
+    expect(policy.onInput).not.toHaveBeenCalled();
+  });
+
+  // ---- tool_call ----
+
+  it("tool_call hook can block tool execution for active custom posture", async () => {
+    const policy = createCustomPolicy();
+    policy.onToolCall.mockReturnValue({ block: true, reason: "not allowed" });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("restricted", policy);
+    const results = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "rm -rf /" },
+    });
+
+    expect(policy.onToolCall).toHaveBeenCalledTimes(1);
+    expect(policy.onToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "restricted" }),
+      expect.objectContaining({ toolCallId: "call-1", toolName: "bash" }),
+    );
+    const blockResult = results.find(
+      (r: any) => r && r.block === true,
+    );
+    expect(blockResult).toBeDefined();
+    expect(blockResult!.reason).toBe("not allowed");
+  });
+
+  it("tool_call hook is not called for inactive posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "read",
+      input: {},
+    });
+
+    expect(policy.onToolCall).not.toHaveBeenCalled();
+  });
+
+  it("tool_call hook not called for default/static posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+    const results = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+    });
+
+    expect(results.every((r: any) => r === undefined)).toBe(true);
+    expect(policy.onToolCall).not.toHaveBeenCalled();
+  });
+
+  // ---- tool_result ----
+
+  it("tool_result hook can patch content for active custom posture", async () => {
+    const policy = createCustomPolicy();
+    policy.onToolResult.mockReturnValue({
+      content: [{ type: "text", text: "patched" }],
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    const results = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "read",
+      input: { path: "/tmp/file" },
+      content: [{ type: "text", text: "original" }],
+      isError: false,
+    });
+
+    expect(policy.onToolResult).toHaveBeenCalledTimes(1);
+    expect(policy.onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+      expect.objectContaining({ toolCallId: "call-1", toolName: "read" }),
+    );
+    const patchResult = results.find(
+      (r: any) => r && r.content,
+    );
+    expect(patchResult).toBeDefined();
+    expect(patchResult!.content![0].text).toBe("patched");
+  });
+
+  it("tool_result hook can mark error for active custom posture", async () => {
+    const policy = createCustomPolicy();
+    policy.onToolResult.mockReturnValue({ isError: true });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    const results = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "false" },
+      content: [{ type: "text", text: "failed" }],
+      isError: false,
+    });
+
+    const errorResult = results.find((r: any) => r && r.isError === true);
+    expect(errorResult).toBeDefined();
+  });
+
+  it("tool_result hook is not called for inactive posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+    });
+
+    expect(policy.onToolResult).not.toHaveBeenCalled();
+  });
+
+  // ---- turn_end / agent_end (observation only) ----
+
+  it("turn_end hook is called for active custom posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, timestamp: 100 });
+
+    expect(policy.onTurnEnd).toHaveBeenCalledTimes(1);
+    expect(policy.onTurnEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+    );
+  });
+
+  it("agent_end hook is called for active custom posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    await harness.emit("agent_end", { type: "agent_end", messages: [] });
+
+    expect(policy.onAgentEnd).toHaveBeenCalledTimes(1);
+    expect(policy.onAgentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+    );
+  });
+
+  it("turn_end and agent_end hooks are not called for default/static posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, timestamp: 100 });
+    await harness.emit("agent_end", { type: "agent_end", messages: [] });
+
+    expect(policy.onTurnEnd).not.toHaveBeenCalled();
+    expect(policy.onAgentEnd).not.toHaveBeenCalled();
+  });
+
+  // ---- session hooks ----
+
+  it("session_shutdown hook is called for active custom posture through dispatch", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+
+    expect(policy.onSessionShutdown).toHaveBeenCalledTimes(1);
+    expect(policy.onSessionShutdown).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+    );
+  });
+
+  it("session_shutdown hook is not called for default/static posture", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+
+    expect(policy.onSessionShutdown).not.toHaveBeenCalled();
+  });
+
+  // ---- callPolicyHook helper ----
+
+  it("callPolicyHook returns undefined when policy is static or missing", () => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "agent";
+    // agent has type "static" policy
+    const result = __testing.callPolicyHook(vi.fn(), {});
+    expect(result).toBeUndefined();
+  });
+
+  it("callPolicyHook returns undefined when hook is undefined", () => {
+    const policy = createCustomPolicy();
+    installAndActivate("guided", policy);
+    const result = __testing.callPolicyHook(undefined);
+    expect(result).toBeUndefined();
+  });
+
+  it("activePolicyContext returns correct postureId and mutable runtime state", () => {
+    const policy = createCustomPolicy();
+    installAndActivate("guided", policy);
+
+    const ctx = __testing.activePolicyContext();
+    expect(ctx.postureId).toBe("guided");
+    expect(ctx.runtimeState.activationCount).toBe(0);
+
+    // Mutation reflects in the stored state
+    ctx.runtimeState.activationCount = 1;
+    expect(__testing.getOrCreatePostureRuntimeState("guided").activationCount).toBe(1);
+  });
+
+  it("no hooks are called for inactive posture even when all emit events", async () => {
+    const policy = createCustomPolicy();
+
+    const harness = fakeExtension("/tmp");
+    __testing.setPostureDefinition("active-posture", {
+      id: "active-posture",
+      label: "Active",
+      description: "Active posture",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+    await harness.emit("input", { type: "input", text: "hi", source: "interactive" });
+    await harness.emit("tool_call", { type: "tool_call", toolCallId: "c1", toolName: "bash", input: { command: "ls" } });
+    await harness.emit("tool_result", { type: "tool_result", toolCallId: "c1", toolName: "bash", input: { command: "ls" }, content: [], isError: false });
+    await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, timestamp: 100 });
+    await harness.emit("agent_end", { type: "agent_end", messages: [] });
+    await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+
+    expect(policy.onBeforeAgentStart).not.toHaveBeenCalled();
+    expect(policy.onInput).not.toHaveBeenCalled();
+    expect(policy.onToolCall).not.toHaveBeenCalled();
+    expect(policy.onToolResult).not.toHaveBeenCalled();
+    expect(policy.onTurnEnd).not.toHaveBeenCalled();
+    expect(policy.onAgentEnd).not.toHaveBeenCalled();
+    expect(policy.onSessionShutdown).not.toHaveBeenCalled();
   });
 });
 

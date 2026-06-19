@@ -14,6 +14,62 @@ export type ContextPolicy = {
   project?: ContextDecision;
 };
 
+// ============================================================
+// Policy Hook Types
+// ============================================================
+
+/** Context passed to all policy hooks. */
+export type PolicyHookContext = {
+  postureId: string;
+  runtimeState: PostureRuntimeState;
+};
+
+/** Input data for before_agent_start hook. */
+export type PolicyBeforeAgentStartInput = {
+  prompt: string;
+  systemPrompt: string;
+};
+
+/** Result from before_agent_start hook. */
+export type PolicyBeforeAgentStartResult = {
+  systemPrompt?: string;
+};
+
+/** Input data for input hook (user message). */
+export type PolicyInputInput = {
+  text: string;
+};
+
+/** Result from input hook. */
+export type PolicyInputResult = {
+  action?: "continue" | "handled";
+  text?: string;
+};
+
+/** Input data for tool_call hook. */
+export type PolicyToolCallInput = {
+  toolCallId: string;
+  toolName: string;
+};
+
+/** Result from tool_call hook. */
+export type PolicyToolCallResult = {
+  block?: boolean;
+  reason?: string;
+};
+
+/** Input data for tool_result hook. */
+export type PolicyToolResultInput = {
+  toolCallId: string;
+  toolName: string;
+};
+
+/** Result from tool_result hook. */
+export type PolicyToolResultResult = {
+  content?: unknown;
+  isError?: boolean;
+};
+
 export type PosturePolicy = {
   /** Origin of this policy object: "static" for adapter-generated compat shim,
    *  "custom" for user-supplied. */
@@ -24,6 +80,34 @@ export type PosturePolicy = {
   onActivate?: (state: PostureRuntimeState) => void;
   /** Invoked when switching away from this posture. */
   onDeactivate?: (state: PostureRuntimeState) => void;
+  /** Invoked before each agent turn to modify the system prompt or add messages. */
+  onBeforeAgentStart?: (
+    ctx: PolicyHookContext,
+    input: PolicyBeforeAgentStartInput,
+  ) => PolicyBeforeAgentStartResult | undefined;
+  /** Invoked on user input to transform or intercept the message. */
+  onInput?: (
+    ctx: PolicyHookContext,
+    input: PolicyInputInput,
+  ) => PolicyInputResult | undefined;
+  /** Invoked before a tool executes; can block or transform the call. */
+  onToolCall?: (
+    ctx: PolicyHookContext,
+    input: PolicyToolCallInput,
+  ) => PolicyToolCallResult | undefined;
+  /** Invoked after a tool executes; can patch the result. */
+  onToolResult?: (
+    ctx: PolicyHookContext,
+    input: PolicyToolResultInput,
+  ) => PolicyToolResultResult | undefined;
+  /** Invoked at the end of each turn for observation. */
+  onTurnEnd?: (ctx: PolicyHookContext) => void;
+  /** Invoked when the agent loop ends for observation. */
+  onAgentEnd?: (ctx: PolicyHookContext) => void;
+  /** Invoked on session start. */
+  onSessionStart?: (ctx: PolicyHookContext) => void;
+  /** Invoked on session shutdown. */
+  onSessionShutdown?: (ctx: PolicyHookContext) => void;
 };
 
 /** Declarative posture definition. Each posture is a named configuration

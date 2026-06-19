@@ -16,6 +16,11 @@ import {
 
 import type {
   ContextPolicy,
+  PolicyBeforeAgentStartInput,
+  PolicyHookContext,
+  PolicyInputInput,
+  PolicyToolCallInput,
+  PolicyToolResultInput,
   PostureDefinition,
   PostureRuntimeState,
   SessionStartReason,
@@ -526,6 +531,32 @@ async function maybePromptStartupPosture(
 }
 
 // ============================================================
+// Policy Hook Dispatch
+// ============================================================
+
+function activePolicyContext(): PolicyHookContext {
+  const posture = activePosture();
+  return {
+    postureId: posture.id,
+    runtimeState: getOrCreatePostureRuntimeState(posture.id),
+  };
+}
+
+/**
+ * Call a policy hook for the active posture if it exists and the policy
+ * type is "custom". Returns the hook's result or undefined.
+ */
+function callPolicyHook<T extends (...args: any[]) => any>(
+  hook: T | undefined,
+  ...args: T extends (ctx: PolicyHookContext, ...rest: infer R) => any ? R : never
+): ReturnType<T> | undefined {
+  const posture = activePosture();
+  const policy = posture.policy;
+  if (!policy || policy.type !== "custom" || !hook) return undefined;
+  return hook(activePolicyContext(), ...args);
+}
+
+// ============================================================
 // Test Surface
 // ============================================================
 
@@ -558,6 +589,13 @@ export const __testing = {
   selectPosture,
   switchPosture,
   postureLabel,
+  activePolicyContext,
+  callPolicyHook,
+
+  // Test helpers
+  setPostureDefinition(id: string, def: PostureDefinition) {
+    getRegistryState().postures.set(id, def);
+  },
 };
 
 // ============================================================
@@ -675,17 +713,90 @@ export default function piPosture(pi: ExtensionAPI) {
   pi.on("before_agent_start", (event, ctx) => {
     setStatus(ctx);
     const posture = activePosture();
-    if (posture.id === "default") return;
+    const policy = posture.policy;
+
+    // Start with existing overlay behavior
+    let systemPrompt = event.systemPrompt;
+    if (posture.id !== "default") {
+      systemPrompt = addPromptOverlay(systemPrompt, posture, event.systemPromptOptions);
+    }
+
+    // Chain policy hook result if present
+    if (policy?.type === "custom" && policy.onBeforeAgentStart) {
+      const hookInput: PolicyBeforeAgentStartInput = {
+        prompt: event.prompt,
+        systemPrompt: event.systemPrompt,
+      };
+      const hookResult = policy.onBeforeAgentStart(
+        activePolicyContext(),
+        hookInput,
+      );
+      if (hookResult?.systemPrompt) {
+        systemPrompt = `${systemPrompt}\n${hookResult.systemPrompt}`;
+      }
+    }
+
+    return { systemPrompt };
+  });
+
+  pi.on("input", (event) => {
+    const policy = activePosture().policy;
+    if (policy?.type !== "custom") return;
+    const hook = policy.onInput;
+    if (!hook) return;
+    const hookInput: PolicyInputInput = { text: event.text };
+    const result = hook(activePolicyContext(), hookInput);
+    if (!result) return;
+    // Map policy hook result to Pi InputEventResult
+    if (result.action === "handled") {
+      return { action: "handled" as const };
+    }
+    if (result.action === "continue") {
+      return { action: "continue" as const };
+    }
+    return;
+  });
+
+  pi.on("tool_call", (event) => {
+    const policy = activePosture().policy;
+    if (policy?.type !== "custom") return;
+    const hook = policy.onToolCall;
+    if (!hook) return;
+    const hookInput: PolicyToolCallInput = {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+    };
+    // PolicyToolCallResult is structurally identical to ToolCallEventResult
+    return hook(activePolicyContext(), hookInput);
+  });
+
+  pi.on("tool_result", (event) => {
+    const policy = activePosture().policy;
+    if (policy?.type !== "custom") return;
+    const hook = policy.onToolResult;
+    if (!hook) return;
+    const hookInput: PolicyToolResultInput = {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+    };
+    const result = hook(activePolicyContext(), hookInput);
+    if (!result) return;
+    // Patch content/isError into the result, preserving original content if not patched
     return {
-      systemPrompt: addPromptOverlay(
-        event.systemPrompt,
-        posture,
-        event.systemPromptOptions,
-      ),
+      content: result.content !== undefined ? (result.content as any) : undefined,
+      isError: result.isError,
     };
   });
 
+  pi.on("turn_end", () => {
+    callPolicyHook(activePosture().policy?.onTurnEnd);
+  });
+
+  pi.on("agent_end", () => {
+    callPolicyHook(activePosture().policy?.onAgentEnd);
+  });
+
   pi.on("session_shutdown", () => {
-    // Do not mutate runtime on shutdown; the process/session is going away or reloading.
+    callPolicyHook(activePosture().policy?.onSessionShutdown);
   });
 }
