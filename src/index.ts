@@ -537,14 +537,46 @@ function switchPosture(
   ctx: ExtensionContext,
   posture: PostureDefinition,
 ) {
+  const before = snapshotPostureRuntimeStates();
+
+  // --- Lifecycle hooks (before changing activePostureId) ---
+  const prevPosture = activePosture();
+  const prevId = runtimeState.activePostureId;
+
+  // Previous posture onDeactivate
+  if (prevId !== posture.id && prevPosture.policy?.type === "custom" && prevPosture.policy.onDeactivate) {
+    const prevState = postureRuntimeStates.get(prevId);
+    if (prevState) {
+      prevPosture.policy.onDeactivate(prevState);
+    }
+  }
+
+  // Target posture onBeforeActivate
+  const targetState = getOrCreatePostureRuntimeState(posture.id);
+  if (posture.policy?.type === "custom" && posture.policy.onBeforeActivate) {
+    const result = posture.policy.onBeforeActivate(targetState);
+    if (result !== undefined) {
+      Object.assign(targetState, result);
+    }
+  }
+
+  // --- Activation ---
   runtimeState.activePostureId = posture.id;
+  targetState.lastActivatedAt = Date.now();
+  targetState.activationCount += 1;
+
+  // Target posture onActivate
+  if (posture.policy?.type === "custom" && posture.policy.onActivate) {
+    posture.policy.onActivate(targetState);
+  }
+
+  // --- Apply runtime and persist ---
   applyRuntime(pi, ctx, posture);
   rememberPosture(pi, posture.id);
-  // Update per-posture runtime state
-  const state = getOrCreatePostureRuntimeState(posture.id);
-  state.lastActivatedAt = Date.now();
-  state.activationCount += 1;
-  persistPostureRuntimeState(pi);
+
+  // Persist if any lifecycle hook, activation metadata, or UI hook changed state
+  persistIfChanged(pi, before);
+
   pi.sendMessage({
     customType: MESSAGE_TYPE,
     content: `Switched to ${postureSummary(posture)}`,
@@ -601,6 +633,8 @@ async function maybePromptStartupPosture(
 // Policy Hook Dispatch
 // ============================================================
 
+type PolicyHookFunction = (ctx: PolicyHookContext, ...args: unknown[]) => unknown;
+
 function activePolicyContext(): PolicyHookContext {
   const posture = activePosture();
   return {
@@ -613,21 +647,21 @@ function activePolicyContext(): PolicyHookContext {
  * Call a policy hook for the active posture if it exists and the policy
  * type is "custom". Returns the hook's result or undefined.
  */
-function callPolicyHook<T extends (...args: any[]) => any>(
-  hook: T | undefined,
-  ...args: T extends (ctx: PolicyHookContext, ...rest: infer R) => any ? R : never
-): ReturnType<T> | undefined {
+function callPolicyHook(
+  hook: PolicyHookFunction | undefined,
+  ...args: unknown[]
+): unknown {
   const posture = activePosture();
   const policy = posture.policy;
   if (!policy || policy.type !== "custom" || !hook) return undefined;
   return hook(activePolicyContext(), ...args);
 }
 
-function callPolicyHookAndPersist<T extends (...args: any[]) => any>(
+function callPolicyHookAndPersist(
   pi: ExtensionAPI,
-  hook: T | undefined,
-  ...args: T extends (ctx: PolicyHookContext, ...rest: infer R) => any ? R : never
-): ReturnType<T> | undefined {
+  hook: PolicyHookFunction | undefined,
+  ...args: unknown[]
+): unknown {
   const posture = activePosture();
   const policy = posture.policy;
   if (!policy || policy.type !== "custom" || !hook) return undefined;

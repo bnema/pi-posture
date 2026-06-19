@@ -1852,6 +1852,145 @@ describe("policy hook dispatch", () => {
       expect.objectContaining({ prompt: "test" }),
     );
   });
+
+  // ---- lifecycle hooks (Phase 3 fix) ----
+
+  it("lifecycle hooks are called in correct order on posture switch", () => {
+    const harness = fakeExtension(cwd);
+
+    const sourcePolicy = createCustomPolicy();
+    __testing.setPostureDefinition("source", {
+      id: "source",
+      label: "Source",
+      description: "Source posture for lifecycle tests",
+      policy: sourcePolicy,
+    });
+
+    const targetPolicy = createCustomPolicy();
+    __testing.setPostureDefinition("target", {
+      id: "target",
+      label: "Target",
+      description: "Target posture for lifecycle tests",
+      policy: targetPolicy,
+    });
+
+    // Activate source first
+    __testing.switchPosture(harness.pi as any, harness.ctx as any, __testing.getRegistryState().postures.get("source")!);
+
+    // Clear call history
+    sourcePolicy.onDeactivate.mockClear();
+    targetPolicy.onBeforeActivate.mockClear();
+    targetPolicy.onActivate.mockClear();
+
+    // Switch to target
+    __testing.switchPosture(harness.pi as any, harness.ctx as any, __testing.getRegistryState().postures.get("target")!);
+
+    // All lifecycle hooks called
+    expect(sourcePolicy.onDeactivate).toHaveBeenCalledTimes(1);
+    expect(targetPolicy.onBeforeActivate).toHaveBeenCalledTimes(1);
+    expect(targetPolicy.onActivate).toHaveBeenCalledTimes(1);
+
+    // Correct invocation order: onDeactivate → onBeforeActivate → onActivate
+    expect(sourcePolicy.onDeactivate.mock.invocationCallOrder[0]).toBeLessThan(
+      targetPolicy.onBeforeActivate.mock.invocationCallOrder[0],
+    );
+    expect(targetPolicy.onBeforeActivate.mock.invocationCallOrder[0]).toBeLessThan(
+      targetPolicy.onActivate.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("onBeforeActivate returned state affects stored runtime state", () => {
+    const harness = fakeExtension(cwd);
+
+    const policy = createCustomPolicy();
+    policy.onBeforeActivate = vi.fn().mockReturnValue({
+      activationCount: 42,
+    });
+
+    __testing.setPostureDefinition("custom", {
+      id: "custom",
+      label: "Custom",
+      description: "Custom posture",
+      policy,
+    });
+
+    __testing.switchPosture(harness.pi as any, harness.ctx as any, __testing.getRegistryState().postures.get("custom")!);
+
+    // activationCount starts at 42 (from onBeforeActivate), then incremented by activation
+    const state = __testing.getOrCreatePostureRuntimeState("custom");
+    expect(state.activationCount).toBe(43);
+  });
+
+  it("lifecycle hook mutations are persisted once with the switch state entry", () => {
+    const harness = fakeExtension(cwd);
+
+    const sourcePolicy = createCustomPolicy();
+    sourcePolicy.onDeactivate = vi.fn((state: any) => {
+      state.activationCount += 10;
+    });
+
+    const targetPolicy = createCustomPolicy();
+    targetPolicy.onBeforeActivate = vi.fn((state: any) => {
+      state.activationCount += 20;
+      return undefined;
+    });
+    targetPolicy.onActivate = vi.fn((state: any) => {
+      state.activationCount += 30;
+    });
+
+    __testing.setPostureDefinition("source", {
+      id: "source",
+      label: "Source",
+      description: "Source posture",
+      policy: sourcePolicy,
+    });
+    __testing.setPostureDefinition("target", {
+      id: "target",
+      label: "Target",
+      description: "Target posture",
+      policy: targetPolicy,
+    });
+
+    // Activate source first
+    __testing.switchPosture(harness.pi as any, harness.ctx as any, __testing.getRegistryState().postures.get("source")!);
+
+    // Reset appended entries, then switch to target
+    harness.appended.length = 0;
+    __testing.switchPosture(harness.pi as any, harness.ctx as any, __testing.getRegistryState().postures.get("target")!);
+
+    const stateEntries = harness.appended.filter(
+      (e) => e.customType === "pi-posture-state",
+    );
+    // Exactly one persist entry for the switch (lifecycle + activation metadata)
+    expect(stateEntries).toHaveLength(1);
+
+    const states = (stateEntries[0].data as any).states;
+    // Source: activationCount was 1 (from first activation), +10 from onDeactivate = 11
+    expect(states.source.activationCount).toBe(11);
+    // Target: activationCount was 0, +20 from onBeforeActivate, +1 from activation metadata, +30 from onActivate = 51
+    expect(states.target.activationCount).toBe(51);
+  });
+
+  it("switch between static/default postures does not call custom lifecycle hooks", () => {
+    const harness = fakeExtension(cwd);
+
+    const policy = createCustomPolicy();
+    __testing.setPostureDefinition("custom", {
+      id: "custom",
+      label: "Custom",
+      description: "Custom posture",
+      policy,
+    });
+
+    // Switch from default (static) to custom
+    __testing.switchPosture(harness.pi as any, harness.ctx as any, __testing.getRegistryState().postures.get("custom")!);
+
+    // Default has no custom lifecycle hooks → only target hooks called
+    expect(policy.onBeforeActivate).toHaveBeenCalledTimes(1);
+    expect(policy.onActivate).toHaveBeenCalledTimes(1);
+    // No onDeactivate called (prev is default/static)
+    expect(policy.onDeactivate).not.toHaveBeenCalled();
+  });
 });
 
 // ============================================================
