@@ -208,27 +208,6 @@ export function isConfigurableSessionStartReason(
   );
 }
 
-export function normalizeStringList(value: unknown, source: string): string[] | undefined {
-  if (!Array.isArray(value)) {
-    addConfigError(`${source}: must be an array`);
-    return undefined;
-  }
-  const normalized: string[] = [];
-  value.forEach((item, index) => {
-    if (typeof item !== "string") {
-      addConfigError(`${source}[${index}]: must be a string`);
-      return;
-    }
-    const id = normalizeId(item);
-    if (!id) {
-      addConfigError(`${source}[${index}]: must not be empty`);
-      return;
-    }
-    normalized.push(id);
-  });
-  return normalized;
-}
-
 /** Wrap a PostureDefinition that has no explicit policy with a static compat shim.
  *  If the definition already carries a policy it is returned as a shallow copy
  *  with the existing policy preserved. */
@@ -515,162 +494,13 @@ function readConfig(path: string): PostureConfig | undefined {
   }
 }
 
-function mergeStartupPicker(
-  value: PostureConfig["startupPicker"],
-  source: string,
-): void {
-  if (value === undefined) return;
-  if (typeof value === "boolean") {
-    internalState.startupPicker.enabled = value;
-    return;
-  }
-  if (!isRecord(value)) {
-    addConfigError(`${source}.startupPicker: must be an object or boolean`);
-    return;
-  }
 
-  if (value.enabled !== undefined) {
-    if (typeof value.enabled === "boolean")
-      internalState.startupPicker.enabled = value.enabled;
-    else addConfigError(`${source}.startupPicker.enabled: must be a boolean`);
-  }
-  if (value.onlyWhenUnset !== undefined) {
-    if (typeof value.onlyWhenUnset === "boolean")
-      internalState.startupPicker.onlyWhenUnset = value.onlyWhenUnset;
-    else addConfigError(`${source}.startupPicker.onlyWhenUnset: must be a boolean`);
-  }
-  if (value.include !== undefined) {
-    const include = normalizeStringList(value.include, `${source}.startupPicker.include`);
-    if (include) internalState.startupPicker.include = include;
-  }
-  if (value.reasons !== undefined) {
-    const reasons = normalizeStringList(value.reasons, `${source}.startupPicker.reasons`);
-    if (reasons) {
-      const valid = reasons.filter(isConfigurableSessionStartReason);
-      const invalid = reasons.filter(
-        (reason) => !isConfigurableSessionStartReason(reason),
-      );
-      for (const reason of invalid)
-        addConfigError(`${source}.startupPicker.reasons: invalid reason "${reason}"`);
-      internalState.startupPicker.reasons = valid;
-    }
-  }
-  if (value.timeoutMs !== undefined) {
-    if (
-      typeof value.timeoutMs === "number" &&
-      Number.isFinite(value.timeoutMs) &&
-      value.timeoutMs > 0
-    ) {
-      internalState.startupPicker.timeoutMs = value.timeoutMs;
-    } else {
-      addConfigError(`${source}.startupPicker.timeoutMs: must be a positive number`);
-    }
-  }
-}
 
-function normalizePosture(
-  id: string,
-  value: PostureConfigEntry,
-  source: string,
-): PostureDefinition | undefined {
-  if (!isRecord(value)) {
-    addConfigError(`${source}: posture must be an object`);
-    return undefined;
-  }
 
-  const existing = internalState.postures.get(id);
-  const label =
-    typeof value.label === "string" ? value.label : existing?.label ?? id;
-  const description =
-    typeof value.description === "string"
-      ? value.description
-      : existing?.description ?? "Custom posture";
-  const promptOverlay =
-    typeof value.promptOverlay === "string"
-      ? value.promptOverlay
-      : existing?.promptOverlay;
-  const contextPolicy =
-    normalizeContextPolicy(value.contextPolicy, source) ?? existing?.contextPolicy;
-  const activeTools = Array.isArray(value.activeTools)
-    ? value.activeTools.filter(
-        (tool): tool is string => typeof tool === "string" && tool.trim().length > 0,
-      )
-    : existing?.activeTools;
-  const thinking =
-    value.thinking === undefined
-      ? existing?.thinking
-      : validateThinking(value.thinking)
-        ? value.thinking
-        : undefined;
 
-  if (value.thinking !== undefined && thinking === undefined) {
-    addConfigError(`${source}.thinking: invalid thinking level`);
-  }
 
-  return withStaticPosturePolicy({
-    id,
-    label,
-    description,
-    promptOverlay,
-    contextPolicy,
-    activeTools,
-    thinking,
-  });
-}
 
-function mergeConfig(config: PostureConfig | undefined, source: string): void {
-  if (!config) return;
-  if (config.postures !== undefined) {
-    if (!isRecord(config.postures)) {
-      addConfigError(`${source}.postures: must be an object`);
-    } else {
-      for (const [rawId, rawPosture] of Object.entries(config.postures)) {
-        const id = normalizeId(rawId);
-        if (!id) continue;
-        const posture = normalizePosture(
-          id,
-          rawPosture,
-          `${source}.postures.${rawId}`,
-        );
-        if (posture) internalState.postures.set(id, posture);
-      }
-    }
-  }
 
-  if (config.aliases !== undefined) {
-    if (!isRecord(config.aliases)) {
-      addConfigError(`${source}.aliases: must be an object`);
-    } else {
-      for (const [rawAlias, target] of Object.entries(config.aliases)) {
-        if (typeof target !== "string") {
-          addConfigError(`${source}.aliases.${rawAlias}: target must be a string`);
-          continue;
-        }
-        internalState.aliases.set(normalizeId(rawAlias), normalizeId(target));
-      }
-    }
-  }
-  mergeStartupPicker(config.startupPicker, source);
-}
-
-function normalizeStartupPickerConfig(): void {
-  const seen = new Set<string>();
-  const include: string[] = [];
-  for (const rawId of internalState.startupPicker.include) {
-    const id = resolvePostureId(rawId);
-    if (!id) {
-      addConfigError(`startupPicker.include: unknown posture or alias "${rawId}"`);
-      continue;
-    }
-    if (seen.has(id)) {
-      addConfigError(`startupPicker.include: duplicate posture "${id}" from "${rawId}"`);
-      continue;
-    }
-    seen.add(id);
-    include.push(rawId);
-  }
-  internalState.startupPicker.include = include;
-}
 
 export function resolvePostureId(input: string): string | undefined {
   const normalized = normalizeId(input);
