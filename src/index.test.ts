@@ -485,4 +485,52 @@ describe("pi-posture internals", () => {
     expect(__testing.runtimeState.activePostureId).toBe("learn");
     expect(harness.appended).toContainEqual({ customType: "posture", data: expect.objectContaining({ id: "learn" }) });
   });
+
+  // ============================================================
+  // Policy adapter tests (Phase 1 — static compat shim)
+  // ============================================================
+
+  it("adds static policy to built-in postures after registry reset", () => {
+    __testing.resetRegistry();
+    const reg = __testing.getRegistryState();
+    for (const posture of reg.postures.values()) {
+      expect(posture.policy).toBeDefined();
+      expect(posture.policy!.type).toBe("static");
+    }
+  });
+
+  it("adds static policy to custom config postures", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Custom posture from config" },
+      },
+    });
+    __testing.loadPostures(cwd);
+    const posture = __testing.getRegistryState().postures.get("custom")!;
+    expect(posture.policy).toBeDefined();
+    expect(posture.policy!.type).toBe("static");
+  });
+
+  it("preserves an explicitly supplied policy object through the adapter", () => {
+    const customPolicy = { type: "custom" as const };
+    const adapted = __testing.withStaticPosturePolicy({
+      id: "custom-policy",
+      label: "Custom Policy",
+      description: "Has a custom policy",
+      policy: customPolicy,
+    });
+    // Reference equality — the adapter returns a shallow copy preserving the same object
+    expect(adapted.policy).toBe(customPolicy);
+    expect(adapted.policy!.type).toBe("custom");
+  });
+
+  it("prompt overlay behavior remains unchanged after adapter integration", () => {
+    __testing.runtimeState.activePostureId = "learn";
+    const learnPrompt = __testing.addPromptOverlay("base", __testing.activePosture());
+    expect(learnPrompt).toContain('<pi_posture id="learn">');
+
+    __testing.runtimeState.activePostureId = "default";
+    const defaultPrompt = __testing.addPromptOverlay("base", __testing.activePosture());
+    expect(defaultPrompt).toBe("base");
+  });
 });

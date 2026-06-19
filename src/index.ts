@@ -11,6 +11,7 @@ import {
   resetRegistry,
   resolvePostureId,
   selectableStartupPostures,
+  withStaticPosturePolicy,
 } from "./posture-registry.js";
 
 import type {
@@ -488,6 +489,7 @@ export const __testing = {
   resolvePostureId,
   selectableStartupPostures,
   getRegistryState,
+  withStaticPosturePolicy,
 
   // Runtime state (mutable, for direct test manipulation)
   runtimeState,

@@ -14,7 +14,17 @@ export type ContextPolicy = {
   project?: ContextDecision;
 };
 
-export type PosturePolicy = {};
+export type PosturePolicy = {
+  /** Origin of this policy object: "static" for adapter-generated compat shim,
+   *  "custom" for user-supplied. */
+  type: "static" | "custom";
+  /** Invoked before the posture is activated. Return a modified state or undefined. */
+  onBeforeActivate?: (state: PostureRuntimeState) => PostureRuntimeState | undefined;
+  /** Invoked after the posture becomes active. */
+  onActivate?: (state: PostureRuntimeState) => void;
+  /** Invoked when switching away from this posture. */
+  onDeactivate?: (state: PostureRuntimeState) => void;
+};
 
 /** Declarative posture definition. Each posture is a named configuration
  * that modifies Pi's behavior via prompt overlays, context policies,
@@ -31,8 +41,13 @@ export type PostureDefinition = {
   policy?: PosturePolicy;
 };
 
-/** Generic per-posture runtime state, reserved for session persistence. */
-export type PostureRuntimeState = Record<string, unknown>;
+/** Per-posture runtime state, reserved for session persistence. */
+export type PostureRuntimeState = {
+  /** Timestamp (ms since epoch) when this posture was last activated. */
+  lastActivatedAt?: number;
+  /** Monotonically increasing counter of activations. */
+  activationCount: number;
+};
 
 export type SessionStartReason = "startup" | "reload" | "new" | "resume" | "fork";
 
@@ -209,6 +224,17 @@ export function normalizeStringList(value: unknown, source: string): string[] | 
   return normalized;
 }
 
+/** Wrap a PostureDefinition that has no explicit policy with a static compat shim.
+ *  If the definition already carries a policy it is returned as a shallow copy
+ *  with the existing policy preserved. */
+export function withStaticPosturePolicy(def: PostureDefinition): PostureDefinition {
+  if (def.policy) return { ...def };
+  return {
+    ...def,
+    policy: { type: "static" },
+  };
+}
+
 // ============================================================
 // Registry State Mutators / Queries
 // ============================================================
@@ -220,7 +246,7 @@ export function addConfigError(message: string): void {
 
 export function resetRegistry(): void {
   internalState.postures = new Map(
-    BUILTIN_POSTURES.map((posture) => [posture.id, posture]),
+    BUILTIN_POSTURES.map((posture) => [posture.id, withStaticPosturePolicy(posture)]),
   );
   internalState.aliases = new Map(Object.entries(BUILTIN_ALIASES));
   internalState.startupPicker = {
@@ -337,7 +363,7 @@ function normalizePosture(
     addConfigError(`${source}.thinking: invalid thinking level`);
   }
 
-  return {
+  return withStaticPosturePolicy({
     id,
     label,
     description,
@@ -345,7 +371,7 @@ function normalizePosture(
     contextPolicy,
     activeTools,
     thinking,
-  };
+  });
 }
 
 function mergeConfig(config: PostureConfig | undefined, source: string): void {
