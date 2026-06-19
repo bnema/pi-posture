@@ -107,11 +107,21 @@ export type PosturePolicy = {
   /** Origin of this policy object: "static" for adapter-generated compat shim,
    *  "custom" for user-supplied. */
   type: "static" | "custom";
-  /** Invoked before the posture is activated. Return a modified state or undefined. */
+  /**
+   * Invoked before the posture is activated. Lifecycle hooks receive the
+   * runtimeState object directly; event hooks below receive PolicyHookContext.
+   * Return a modified state or undefined.
+   */
   onBeforeActivate?: (state: PostureRuntimeState) => PostureRuntimeState | undefined;
-  /** Invoked after the posture becomes active. */
+  /**
+   * Invoked after the posture becomes active. Lifecycle hooks receive the
+   * runtimeState object directly; event hooks below receive PolicyHookContext.
+   */
   onActivate?: (state: PostureRuntimeState) => void;
-  /** Invoked when switching away from this posture. */
+  /**
+   * Invoked when switching away from this posture. Lifecycle hooks receive the
+   * runtimeState object directly; event hooks below receive PolicyHookContext.
+   */
   onDeactivate?: (state: PostureRuntimeState) => void;
   /** Invoked before each agent turn to modify the system prompt or add messages. */
   onBeforeAgentStart?: (
@@ -248,6 +258,9 @@ export const BUILTIN_ASSIST_POLICY: PosturePolicy = {
         "If the user asks you to take the wheel, offer to switch to agent posture or proceed only with explicit permission.",
     };
   },
+
+  // Assist intentionally does not count turns; it is cognitive guidance for a
+  // human-led pairing session, not an autonomous progress tracker.
 };
 
 /** Built-in review policy providing dynamic guidance around evidence-first

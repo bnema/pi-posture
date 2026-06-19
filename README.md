@@ -101,7 +101,7 @@ Shown at session start when:
 - `startupPicker.enabled` is `true`
 - The session has a UI (`ctx.hasUI`)
 - The session-start reason is in `startupPicker.reasons`
-- Either `onlyWhenUnset` is `false` or no previous posture was restored from the session
+- The picker has a reason to ask: either `onlyWhenUnset` is `false`, or no posture was restored from the current session branch yet
 
 Accepts `true` / `false` to quickly enable or disable with defaults, or a full object.
 

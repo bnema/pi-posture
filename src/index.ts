@@ -966,7 +966,7 @@ export default function piPosture(pi: ExtensionAPI) {
     if (!result) return;
     // Patch content/isError into the result, preserving original content if not patched
     return {
-      content: result.content !== undefined ? result.content : undefined,
+      content: result.content,
       isError: result.isError,
     };
   });
