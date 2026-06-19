@@ -606,7 +606,6 @@ export function buildPostureRegistry(
             if (validateThinking(entry.thinking)) {
               thinking = entry.thinking;
             } else {
-              thinking = undefined;
               addErr(`${source}.postures.${rawId}.thinking: invalid thinking level`);
             }
           }

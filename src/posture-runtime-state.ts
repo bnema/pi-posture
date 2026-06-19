@@ -38,24 +38,30 @@ export function persistPostureRuntimeState(pi: ExtensionAPI): void {
   for (const [id, state] of postureRuntimeStates) {
     states[id] = { ...state };
   }
-  if (Object.keys(states).length > 0) {
-    pi.appendEntry("pi-posture-state", { states });
-  }
+  pi.appendEntry("pi-posture-state", { states });
 }
 
 export function restorePostureRuntimeState(ctx: ExtensionContext): void {
   postureRuntimeStates.clear();
-  for (const entry of ctx.sessionManager.getBranch()) {
+  const branch = ctx.sessionManager.getBranch();
+  let latestEntry: (typeof branch)[number] | undefined;
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
     if (entry.type === "custom" && entry.customType === "pi-posture-state") {
-      const data = entry.data as Record<string, unknown> | undefined;
-      const states = data?.states;
-      if (!isRecord(states)) continue;
-      for (const [id, rawState] of Object.entries(states)) {
-        const sanitized = sanitizePostureRuntimeState(rawState);
-        if (sanitized) {
-          postureRuntimeStates.set(id, sanitized);
-        }
-      }
+      latestEntry = entry;
+      break;
+    }
+  }
+  if (!latestEntry) return;
+
+  const data = (latestEntry as { data?: unknown }).data as Record<string, unknown> | undefined;
+  const states = data?.states;
+  if (!isRecord(states)) return;
+
+  for (const [id, rawState] of Object.entries(states)) {
+    const sanitized = sanitizePostureRuntimeState(rawState);
+    if (sanitized) {
+      postureRuntimeStates.set(id, sanitized);
     }
   }
 }

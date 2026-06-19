@@ -26,6 +26,7 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
   const messages: string[] = [];
   const appended: Array<{ customType: string; data?: unknown }> = [];
   const selectCalls: Array<{ title: string; choices: string[]; options?: unknown }> = [];
+  const statusCalls: Array<{ key: string; content: string | undefined }> = [];
   const widgetCalls: Array<{ key: string; content: string[] | undefined }> = [];
   const pi = {
     registerMessageRenderer() {},
@@ -64,7 +65,9 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
     hasUI: options.hasUI ?? false,
     ui: {
       notify() {},
-      setStatus() {},
+      setStatus(key: string, content: string | undefined) {
+        statusCalls.push({ key, content });
+      },
       setWidget(key: string, content: string[] | undefined) {
         widgetCalls.push({ key, content });
       },
@@ -87,6 +90,7 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
     messages,
     appended,
     selectCalls,
+    statusCalls,
     widgetCalls,
     run: (args: string) => commandHandler!(args, ctx),
     emit: async (event: string, payload: any): Promise<any[]> => {
@@ -673,6 +677,36 @@ describe("pi-posture internals", () => {
     const state = __testing.getOrCreatePostureRuntimeState("agent");
     expect(state.activationCount).toBe(5);
     expect(state.lastActivatedAt).toBe(500);
+  });
+
+  it("latest empty runtime state entry clears earlier states", () => {
+    const branch = [
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: { states: { agent: { activationCount: 5 } } },
+      },
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: { states: {} },
+      },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    expect(__testing.postureRuntimeStates.has("agent")).toBe(false);
+  });
+
+  it("persists empty runtime state snapshots", () => {
+    const harness = fakeExtension(cwd);
+    __testing.postureRuntimeStates.clear();
+
+    __testing.persistPostureRuntimeState(harness.pi as any);
+
+    expect(harness.appended).toContainEqual({
+      customType: "pi-posture-state",
+      data: { states: {} },
+    });
   });
 
   it("switching a posture persists both active posture entry and hidden runtime state entry", async () => {
@@ -1496,6 +1530,7 @@ describe("policy hook dispatch", () => {
     );
     expect(patchResult).toBeDefined();
     expect(patchResult!.content![0].text).toBe("patched");
+    expect(Object.prototype.hasOwnProperty.call(patchResult, "isError")).toBe(false);
   });
 
   it("tool_result hook can mark error for active custom posture", async () => {
@@ -1515,6 +1550,7 @@ describe("policy hook dispatch", () => {
 
     const errorResult = results.find((r: any) => r && r.isError === true);
     expect(errorResult).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(errorResult, "content")).toBe(false);
   });
 
   it("tool_result hook is not called for inactive posture", async () => {
@@ -3180,9 +3216,11 @@ describe("command output compatibility", () => {
     const harness = fakeExtension(cwd);
     await harness.run("agent");
     harness.appended.length = 0;
+    harness.statusCalls.length = 0;
 
     await harness.run("objective Fix Parser BUG");
 
+    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: agent" });
     expect(harness.messages.at(-1)).toBe("Objective set for posture: agent");
     expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBe("Fix Parser BUG");
     expect(harness.appended.at(-1)).toEqual({
@@ -3197,7 +3235,9 @@ describe("command output compatibility", () => {
     await harness.run("objective");
     expect(harness.messages.at(-1)).toContain("Objective: Fix Parser BUG");
 
+    harness.statusCalls.length = 0;
     await harness.run("objective CLEAR");
+    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: agent" });
     expect(harness.messages.at(-1)).toBe("Objective cleared for posture: agent");
     expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBeUndefined();
 
@@ -3212,9 +3252,11 @@ describe("command output compatibility", () => {
     await harness.run("agent");
     __testing.getOrCreatePostureRuntimeState("agent").objective = "Ship it";
     harness.appended.length = 0;
+    harness.statusCalls.length = 0;
 
     await harness.run("clear-state");
 
+    expect(harness.statusCalls.at(-1)).toEqual({ key: "pi-posture", content: "posture: agent" });
     expect(harness.messages.at(-1)).toBe("Cleared runtime state for posture: agent");
     expect(__testing.getOrCreatePostureRuntimeState("agent")).toEqual({ activationCount: 0 });
     expect(harness.appended).toHaveLength(1);
@@ -3493,13 +3535,13 @@ describe("buildPostureRegistry (pure)", () => {
     expect(posture.policy!.type).toBe("static");
   });
 
-  it("invalid thinking clears existing value from previous config", () => {
+  it("invalid thinking preserves existing value from previous config", () => {
     const result = buildPostureRegistry([
       { postures: { test: { thinking: "low" } } },
       { postures: { test: { thinking: "huge" as any } } },
     ]);
     const posture = result.postures.get("test")!;
-    expect(posture.thinking).toBeUndefined();
+    expect(posture.thinking).toBe("low");
     expect(result.configErrors).toContain(
       "config[1].postures.test.thinking: invalid thinking level",
     );

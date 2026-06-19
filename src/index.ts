@@ -800,6 +800,7 @@ export default function piPosture(pi: ExtensionAPI) {
       }
       if (arg === "clear-state") {
         clearRuntimeState(pi);
+        updatePostureUi(pi, ctx);
         pi.sendMessage({
           customType: MESSAGE_TYPE,
           content: `Cleared runtime state for posture: ${runtimeState.activePostureId}`,
@@ -820,6 +821,7 @@ export default function piPosture(pi: ExtensionAPI) {
         }
         if (restCommand === "clear" || restCommand === "--clear") {
           clearPostureObjective(pi);
+          updatePostureUi(pi, ctx);
           pi.sendMessage({
             customType: MESSAGE_TYPE,
             content: `Objective cleared for posture: ${runtimeState.activePostureId}`,
@@ -828,6 +830,7 @@ export default function piPosture(pi: ExtensionAPI) {
           return;
         }
         setPostureObjective(pi, rest);
+        updatePostureUi(pi, ctx);
         pi.sendMessage({
           customType: MESSAGE_TYPE,
           content: `Objective set for posture: ${runtimeState.activePostureId}`,
@@ -964,11 +967,11 @@ export default function piPosture(pi: ExtensionAPI) {
     const result = hook(policyCtx, hookInput);
     persistIfChanged(pi, before);
     if (!result) return;
-    // Patch content/isError into the result, preserving original content if not patched
-    return {
-      content: result.content,
-      isError: result.isError,
-    };
+    // Patch only fields explicitly returned by the policy hook.
+    const patch: { content?: typeof result.content; isError?: boolean } = {};
+    if (result.content !== undefined) patch.content = result.content;
+    if (result.isError !== undefined) patch.isError = result.isError;
+    return patch;
   });
 
   pi.on("turn_end", () => {

@@ -23,6 +23,9 @@ All built-in postures (except `default`) may add **bounded dynamic guidance** be
 /posture list        — list all registered postures
 /posture status      — show active posture summary
 /posture inspect     — show full active posture details including config errors
+/posture state       — show active posture runtime state
+/posture clear-state — reset active posture runtime state
+/posture objective   — show, set, or clear the active posture objective
 /posture <name>      — switch to a posture by name or alias
 ```
 
@@ -52,7 +55,7 @@ Project-local config is loaded from the `.pi` directory (matches Pi's standard p
 | `description` | `string` | Short description shown in lists and the startup picker. |
 | `promptOverlay` | `string` | Injected into the system prompt inside `<pi_posture>` tags when the posture is active. |
 | `contextPolicy` | `object` | Filter project context files. Values: `{ global: "inherit" \| "suppress", project: "inherit" \| "suppress" }`. |
-| `activeTools` | `string[]` | Override the set of active tool names. Unknown tools are silently dropped. |
+| `activeTools` | `string[]` | Override the set of active tool names. Unknown tools are reported as config errors in `/posture inspect`. |
 | `thinking` | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh"` | Override the thinking level. |
 | `interactionStyle` | `"autonomous" \| "assistive" \| "review" \| "socratic" \| "custom"` | Declarative hint about the intended interaction mode. Not a runtime hook. |
 | `mutationPolicy` | `"allow" \| "guarded" \| "read-mostly"` | Declarative hint about mutation permissions. Not a runtime hook. |
