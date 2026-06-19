@@ -226,6 +226,32 @@ export const BUILTIN_ASSIST_POLICY: PosturePolicy = {
   },
 };
 
+/** Built-in review policy providing dynamic guidance around evidence-first
+ *  critique, read-mostly behavior, and guarded mutation. This is an internal
+ *  policy that uses the same runtime hook dispatch mechanism as user-supplied
+ *  custom policies, but is wired in code rather than via JSON config. */
+export const BUILTIN_REVIEW_POLICY: PosturePolicy = {
+  type: "custom",
+
+  onBeforeAgentStart: () => {
+    return {
+      systemPrompt:
+        "## Review Guidance\n" +
+        "\n" +
+        "Adopt an evidence-first approach — inspect code and context before making any judgment.\n" +
+        "Cite file and line evidence when reporting findings or suggested fixes.\n" +
+        "Prefer explaining risks, trade-offs, and opportunities over making direct changes.\n" +
+        "Verify assumptions by running tools and reading relevant files.\n" +
+        "Do not modify files unless the user explicitly asks you to apply a fix.",
+    };
+  },
+
+  onTurnEnd: (ctx) => {
+    ctx.runtimeState.turnsInSession =
+      (ctx.runtimeState.turnsInSession ?? 0) + 1;
+  },
+};
+
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   enabled: false,
   onlyWhenUnset: true,
@@ -276,6 +302,7 @@ Your goal is to help the user understand and practice, not to replace them. Use 
     promptOverlay: `You are in review posture.
 
 Focus on understanding, critique, correctness, maintainability, reuse, security, and verification. Use tools freely to inspect the repository and run checks. Prefer findings, evidence, and suggested fixes over direct edits. Do not modify files unless the user explicitly asks you to apply a fix.`,
+    policy: BUILTIN_REVIEW_POLICY,
   },
 ];
 

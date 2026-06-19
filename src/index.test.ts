@@ -531,10 +531,11 @@ describe("pi-posture internals", () => {
     for (const posture of reg.postures.values()) {
       expect(posture.policy).toBeDefined();
     }
-    // Agent and assist have built-in custom policies; others are static
+    // Agent, assist, and review have built-in custom policies; others are static
     expect(reg.postures.get("agent")!.policy!.type).toBe("custom");
     expect(reg.postures.get("assist")!.policy!.type).toBe("custom");
-    for (const id of ["default", "learn", "review"]) {
+    expect(reg.postures.get("review")!.policy!.type).toBe("custom");
+    for (const id of ["default", "learn"]) {
       expect(reg.postures.get(id)!.policy!.type).toBe("static");
     }
   });
@@ -2171,6 +2172,237 @@ describe("assist built-in policy", () => {
 });
 
 // ============================================================
+// Review built-in policy tests (Phase 3 Task 11)
+// ============================================================
+
+describe("review built-in policy", () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = tempProject();
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("review posture has a built-in custom policy with onBeforeAgentStart and onTurnEnd", () => {
+    __testing.resetRegistry();
+    const review = __testing.getRegistryState().postures.get("review")!;
+    expect(review.policy).toBeDefined();
+    expect(review.policy!.type).toBe("custom");
+    expect(review.policy!.onBeforeAgentStart).toBeDefined();
+    expect(review.policy!.onTurnEnd).toBeDefined();
+  });
+
+  it("review onBeforeAgentStart appends evidence-first dynamic guidance after static overlay", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "review";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base system prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Static overlay present
+    expect(result!.systemPrompt).toContain("base system prompt");
+    expect(result!.systemPrompt).toContain('<pi_posture id="review">');
+    expect(result!.systemPrompt).toContain("Focus on understanding, critique");
+    // Dynamic guidance appended
+    expect(result!.systemPrompt).toContain("Review Guidance");
+    expect(result!.systemPrompt).toContain("evidence-first approach");
+    expect(result!.systemPrompt).toContain("file and line evidence");
+    expect(result!.systemPrompt).toContain("risks, trade-offs");
+    expect(result!.systemPrompt).toContain("Do not modify files");
+  });
+
+  it("review onTurnEnd tracks turns in runtime state", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "review";
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("review").turnsInSession,
+    ).toBe(1);
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 1,
+      timestamp: 200,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("review").turnsInSession,
+    ).toBe(2);
+
+    // Switching away stops increment
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 2,
+      timestamp: 300,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("review").turnsInSession,
+    ).toBe(2);
+  });
+
+  it("review dynamic guidance is absent when default posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "default";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // No review overlay or dynamic guidance
+    expect(result!.systemPrompt).not.toContain('<pi_posture id="review">');
+    expect(result!.systemPrompt).not.toContain("Review Guidance");
+    expect(result!.systemPrompt).not.toContain("evidence-first approach");
+    expect(result!.systemPrompt).not.toContain("file and line evidence");
+    // Plain base
+    expect(result!.systemPrompt).toBe("base prompt");
+  });
+
+  it("review dynamic guidance is absent when another non-review posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Learn overlay present, but no review dynamic guidance
+    expect(result!.systemPrompt).not.toContain("Review Guidance");
+    expect(result!.systemPrompt).not.toContain("evidence-first approach");
+    expect(result!.systemPrompt).not.toContain("file and line evidence");
+  });
+
+  it("review onBeforeAgentStart is not invoked when inactive", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    // Turn end on learn shouldn't affect review's runtime state
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+
+    expect(
+      __testing.getOrCreatePostureRuntimeState("review").turnsInSession,
+    ).toBeUndefined();
+  });
+
+  it("config override for review preserves its custom policy", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          review: { description: "Custom review", thinking: "high" },
+        },
+      },
+    ]);
+    const review = result.postures.get("review")!;
+    expect(review.description).toBe("Custom review");
+    expect(review.thinking).toBe("high");
+    expect(review.policy).toBeDefined();
+    expect(review.policy!.type).toBe("custom");
+    expect(review.policy!.onBeforeAgentStart).toBeDefined();
+    expect(review.policy!.onTurnEnd).toBeDefined();
+  });
+
+  it("review prompt overlay remains intact after config description override", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          review: { description: "Custom review description" },
+        },
+      },
+    ]);
+    const review = result.postures.get("review")!;
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "review")!;
+    expect(review.description).toBe("Custom review description");
+    expect(review.promptOverlay).toBe(builtIn.promptOverlay);
+    expect(review.policy!.type).toBe("custom");
+  });
+
+  it("review policy hook uses custom policy dispatch (not static)", () => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "review";
+
+    const spy = vi.fn();
+    __testing.callPolicyHook(spy, {
+      prompt: "test",
+      systemPrompt: "base",
+    });
+
+    // Review has custom policy, so hooks should be called
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "review" }),
+      expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
+    );
+  });
+
+  it("review turnsInSession does not carry over after switching away", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "review";
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 1,
+      timestamp: 200,
+    });
+
+    // Review state should still be 1 (not incremented by default's turn_end)
+    expect(
+      __testing.getOrCreatePostureRuntimeState("review").turnsInSession,
+    ).toBe(1);
+  });
+});
+
+// ============================================================
 // Pure registry builder tests (no filesystem, no extension runtime)
 // ============================================================
 
@@ -2351,7 +2583,8 @@ describe("buildPostureRegistry (pure)", () => {
     }
     expect(result.postures.get("agent")!.policy!.type).toBe("custom");
     expect(result.postures.get("assist")!.policy!.type).toBe("custom");
-    for (const id of ["default", "learn", "review"]) {
+    expect(result.postures.get("review")!.policy!.type).toBe("custom");
+    for (const id of ["default", "learn"]) {
       expect(result.postures.get(id)!.policy!.type).toBe("static");
     }
   });
