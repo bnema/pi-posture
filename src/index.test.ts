@@ -709,7 +709,10 @@ describe("pi-posture internals", () => {
 // ============================================================
 
 describe("policy hook dispatch", () => {
+  let cwd: string;
+
   beforeEach(() => {
+    cwd = tempProject();
     __testing.resetRegistry();
     __testing.runtimeState.activePostureId = "default";
     __testing.runtimeState.toolSnapshot = undefined;
@@ -718,6 +721,10 @@ describe("policy hook dispatch", () => {
     __testing.runtimeState.appliedThinkingOverride = undefined;
     __testing.runtimeState.contextFilterReport = undefined;
     __testing.postureRuntimeStates.clear();
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   function createCustomPolicy() {
@@ -1331,6 +1338,74 @@ describe("policy hook dispatch", () => {
     expect(policy.onTurnEnd).not.toHaveBeenCalled();
     expect(policy.onAgentEnd).not.toHaveBeenCalled();
     expect(policy.onSessionShutdown).not.toHaveBeenCalled();
+  });
+
+  it("session_start restores per-posture runtime state and before_agent_start hook observes it", async () => {
+    const policy = createCustomPolicy();
+    policy.onBeforeAgentStart = vi.fn().mockReturnValue(undefined);
+
+    // Define the posture in project config so it survives session_start reload
+    writeProjectConfig(cwd, {
+      postures: {
+        tracked: {
+          label: "Tracked",
+          description: "Posture with tracked runtime state",
+        },
+      },
+    });
+
+    const branch = [
+      { type: "custom", customType: "posture", data: { id: "tracked" } },
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: {
+          states: {
+            tracked: { activationCount: 42, lastActivatedAt: 99999 },
+          },
+        },
+      },
+    ];
+
+    const harness = fakeExtension(cwd, { branch });
+
+    // session_start reloads registry (tracked loads from config with static policy),
+    // restores active posture from branch ("tracked"),
+    // restores per-posture runtime state (activationCount: 42)
+    await harness.emit("session_start", { reason: "resume" });
+
+    // Verify restoration
+    expect(__testing.runtimeState.activePostureId).toBe("tracked");
+    const restoredState = __testing.getOrCreatePostureRuntimeState("tracked");
+    expect(restoredState.activationCount).toBe(42);
+    expect(restoredState.lastActivatedAt).toBe(99999);
+
+    // Install custom policy on the posture now that it's loaded from config
+    __testing.setPostureDefinition("tracked", {
+      id: "tracked",
+      label: "Tracked",
+      description: "Posture with tracked runtime state",
+      policy,
+    });
+
+    // Emit before_agent_start — the policy hook should see the restored state
+    await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    expect(policy.onBeforeAgentStart).toHaveBeenCalledTimes(1);
+    expect(policy.onBeforeAgentStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        postureId: "tracked",
+        runtimeState: expect.objectContaining({
+          activationCount: 42,
+          lastActivatedAt: 99999,
+        }),
+      }),
+      expect.objectContaining({ prompt: "test" }),
+    );
   });
 });
 
