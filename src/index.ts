@@ -114,11 +114,21 @@ function snapshotPostureRuntimeStates(): string {
 
 function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null {
   if (!isRecord(value)) return null;
-  const { activationCount, lastActivatedAt } = value as Record<string, unknown>;
+  const { activationCount, lastActivatedAt, turnsInSession } = value as Record<string, unknown>;
   if (typeof activationCount !== "number" || !Number.isFinite(activationCount)) return null;
   if (lastActivatedAt !== undefined && (typeof lastActivatedAt !== "number" || !Number.isFinite(lastActivatedAt))) return null;
+  if (turnsInSession !== undefined) {
+    if (
+      typeof turnsInSession !== "number" ||
+      !Number.isFinite(turnsInSession) ||
+      turnsInSession < 0 ||
+      !Number.isInteger(turnsInSession)
+    )
+      return null;
+  }
   const result: PostureRuntimeState = { activationCount };
   if (lastActivatedAt !== undefined) result.lastActivatedAt = lastActivatedAt;
+  if (turnsInSession !== undefined) result.turnsInSession = turnsInSession;
   return result;
 }
 

@@ -156,6 +156,8 @@ export type PostureRuntimeState = {
   lastActivatedAt?: number;
   /** Monotonically increasing counter of activations. */
   activationCount: number;
+  /** Number of turns observed while this posture was active (via onTurnEnd). */
+  turnsInSession?: number;
 };
 
 export type SessionStartReason = "startup" | "reload" | "new" | "resume" | "fork";
@@ -178,6 +180,32 @@ export type PostureConfig = {
 // Constants
 // ============================================================
 
+/** Built-in agent policy providing dynamic guidance around autonomous
+ *  progress, verification, and escalation. This is an internal policy
+ *  that uses the same runtime hook dispatch mechanism as user-supplied
+ *  custom policies, but is wired in code rather than via JSON config. */
+export const BUILTIN_AGENT_POLICY: PosturePolicy = {
+  type: "custom",
+
+  onBeforeAgentStart: () => {
+    return {
+      systemPrompt:
+        "## Agent Guidance\n" +
+        "\n" +
+        "Maintain forward progress — do not stall on unnecessary checks.\n" +
+        "After making code changes, verify them (typecheck, tests, or relevant commands).\n" +
+        "Continue autonomously when the task path is clear.\n" +
+        "If blocked, uncertain, or needing human judgment — explain clearly and ask.\n" +
+        "Respect all higher-priority instructions and project safety rules.",
+    };
+  },
+
+  onTurnEnd: (ctx) => {
+    ctx.runtimeState.turnsInSession =
+      (ctx.runtimeState.turnsInSession ?? 0) + 1;
+  },
+};
+
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   enabled: false,
   onlyWhenUnset: true,
@@ -199,6 +227,7 @@ export const BUILTIN_POSTURES: PostureDefinition[] = [
     promptOverlay: `You are in agent posture.
 
 The user explicitly wants delegated agentic execution. Move work forward with concise planning, code changes, command execution, and verification when appropriate. Keep the user informed, but do not stall on unnecessary permission checks. Continue to respect all higher-priority user, project, and safety instructions.`,
+    policy: BUILTIN_AGENT_POLICY,
   },
   {
     id: "assist",
@@ -435,18 +464,25 @@ export function buildPostureRegistry(
             }
           }
 
-          postures.set(
+          // Preserve internal/custom policy from the existing definition
+          // (e.g., agent's built-in custom policy) when config override does
+          // not provide an explicit policy object.
+          const mergedDef: PostureDefinition = {
             id,
-            withStaticPosturePolicy({
-              id,
-              label,
-              description,
-              promptOverlay,
-              contextPolicy,
-              activeTools,
-              thinking,
-            }),
-          );
+            label,
+            description,
+            promptOverlay,
+            contextPolicy,
+            activeTools,
+            thinking,
+          };
+          if (
+            existing?.policy &&
+            existing.policy.type !== "static"
+          ) {
+            mergedDef.policy = existing.policy;
+          }
+          postures.set(id, withStaticPosturePolicy(mergedDef));
         }
       }
     }

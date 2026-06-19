@@ -525,12 +525,16 @@ describe("pi-posture internals", () => {
   // Policy adapter tests (Phase 1 — static compat shim)
   // ============================================================
 
-  it("adds static policy to built-in postures after registry reset", () => {
+  it("adds policy to all built-in postures after registry reset, agent is custom", () => {
     __testing.resetRegistry();
     const reg = __testing.getRegistryState();
     for (const posture of reg.postures.values()) {
       expect(posture.policy).toBeDefined();
-      expect(posture.policy!.type).toBe("static");
+    }
+    // Agent has a built-in custom policy; others are static
+    expect(reg.postures.get("agent")!.policy!.type).toBe("custom");
+    for (const id of ["default", "assist", "learn", "review"]) {
+      expect(reg.postures.get(id)!.policy!.type).toBe("static");
     }
   });
 
@@ -1458,8 +1462,8 @@ describe("policy hook dispatch", () => {
 
   it("callPolicyHook returns undefined when policy is static or missing", () => {
     __testing.resetRegistry();
-    __testing.runtimeState.activePostureId = "agent";
-    // agent has type "static" policy
+    __testing.runtimeState.activePostureId = "default";
+    // default has type "static" policy
     const result = __testing.callPolicyHook(vi.fn(), {});
     expect(result).toBeUndefined();
   });
@@ -1829,6 +1833,193 @@ describe("policy hook dispatch", () => {
 });
 
 // ============================================================
+// Agent built-in policy tests (Phase 3)
+// ============================================================
+
+describe("agent built-in policy", () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = tempProject();
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("agent posture has a built-in custom policy with onBeforeAgentStart and onTurnEnd", () => {
+    __testing.resetRegistry();
+    const agent = __testing.getRegistryState().postures.get("agent")!;
+    expect(agent.policy).toBeDefined();
+    expect(agent.policy!.type).toBe("custom");
+    expect(agent.policy!.onBeforeAgentStart).toBeDefined();
+    expect(agent.policy!.onTurnEnd).toBeDefined();
+  });
+
+  it("agent onBeforeAgentStart appends dynamic guidance after static overlay", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "agent";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base system prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Static overlay present
+    expect(result!.systemPrompt).toContain("base system prompt");
+    expect(result!.systemPrompt).toContain('<pi_posture id="agent">');
+    expect(result!.systemPrompt).toContain("delegated agentic execution");
+    // Dynamic guidance appended
+    expect(result!.systemPrompt).toContain("Agent Guidance");
+    expect(result!.systemPrompt).toContain("Maintain forward progress");
+    expect(result!.systemPrompt).toContain("verify");
+    expect(result!.systemPrompt).toContain("blocked");
+  });
+
+  it("agent onTurnEnd tracks turns in runtime state", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "agent";
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+    ).toBe(1);
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 1,
+      timestamp: 200,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+    ).toBe(2);
+
+    // Switching away stops increment
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 2,
+      timestamp: 300,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+    ).toBe(2);
+  });
+
+  it("agent dynamic guidance is not present when default posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "default";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // No agent overlay or dynamic guidance
+    expect(result!.systemPrompt).not.toContain('<pi_posture id="agent">');
+    expect(result!.systemPrompt).not.toContain("Agent Guidance");
+    expect(result!.systemPrompt).not.toContain("forward progress");
+    expect(result!.systemPrompt).not.toContain("blocked");
+    // Plain base
+    expect(result!.systemPrompt).toBe("base prompt");
+  });
+
+  it("agent onBeforeAgentStart is not invoked when inactive", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    // Turn end on learn shouldn't affect agent's runtime state
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+
+    expect(
+      __testing.getOrCreatePostureRuntimeState("agent").turnsInSession,
+    ).toBeUndefined();
+  });
+
+  it("config override for agent preserves its custom policy", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          agent: { description: "Custom agent", thinking: "high" },
+        },
+      },
+    ]);
+    const agent = result.postures.get("agent")!;
+    expect(agent.description).toBe("Custom agent");
+    expect(agent.thinking).toBe("high");
+    expect(agent.policy).toBeDefined();
+    expect(agent.policy!.type).toBe("custom");
+    expect(agent.policy!.onBeforeAgentStart).toBeDefined();
+    expect(agent.policy!.onTurnEnd).toBeDefined();
+  });
+
+  it("agent prompt overlay remains intact after config description override", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          agent: { description: "Custom agent description" },
+        },
+      },
+    ]);
+    const agent = result.postures.get("agent")!;
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "agent")!;
+    expect(agent.description).toBe("Custom agent description");
+    expect(agent.promptOverlay).toBe(builtIn.promptOverlay);
+    expect(agent.policy!.type).toBe("custom");
+  });
+
+  it("agent policy hook uses custom policy dispatch (not static)", () => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "agent";
+
+    const spy = vi.fn();
+    __testing.callPolicyHook(spy, {
+      prompt: "test",
+      systemPrompt: "base",
+    });
+
+    // Agent has custom policy, so hooks should be called
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "agent" }),
+      expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
+    );
+  });
+});
+
+// ============================================================
 // Pure registry builder tests (no filesystem, no extension runtime)
 // ============================================================
 
@@ -2002,11 +2193,14 @@ describe("buildPostureRegistry (pure)", () => {
     expect(posture.policy?.type).toBe("static");
   });
 
-  it("adds static policy to built-in postures from builder", () => {
+  it("adds policy to built-in postures from builder (agent is custom)", () => {
     const result = buildPostureRegistry([]);
     for (const posture of result.postures.values()) {
       expect(posture.policy).toBeDefined();
-      expect(posture.policy!.type).toBe("static");
+    }
+    expect(result.postures.get("agent")!.policy!.type).toBe("custom");
+    for (const id of ["default", "assist", "learn", "review"]) {
+      expect(result.postures.get(id)!.policy!.type).toBe("static");
     }
   });
 
