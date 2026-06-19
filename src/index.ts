@@ -4,10 +4,21 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
+  getOrCreatePostureRuntimeState,
+  isValidTimestamp,
+  persistIfChanged,
+  persistPostureRuntimeState,
+  postureRuntimeStates,
+  restorePostureRuntimeState,
+  runtimeState,
+  sanitizePostureRuntimeState,
+  snapshotPostureRuntimeStates,
+} from "./posture-runtime-state.js";
+
+import {
   addConfigError,
   CONFIG_DIR_NAME,
   getRegistryState,
-  isRecord,
   loadPostures as registryLoadPostures,
   normalizeId,
   resetRegistry,
@@ -26,26 +37,7 @@ import type {
   PostureDefinition,
   PostureRuntimeState,
   SessionStartReason,
-  ThinkingLevel,
 } from "./posture-registry.js";
-
-// ============================================================
-// Runtime Types
-// ============================================================
-
-type ContextFilterReport = {
-  kept: string[];
-  suppressed: string[];
-};
-
-type RuntimeState = {
-  activePostureId: string;
-  contextFilterReport?: ContextFilterReport;
-  toolSnapshot?: string[];
-  appliedToolsOverride?: string[];
-  thinkingSnapshot?: ThinkingLevel;
-  appliedThinkingOverride?: ThinkingLevel;
-};
 
 // ============================================================
 // Constants
@@ -54,99 +46,6 @@ type RuntimeState = {
 const STATUS_KEY = "pi-posture";
 const WIDGET_KEY = "pi-posture-widget";
 const MESSAGE_TYPE = "pi-posture";
-
-// ============================================================
-// Runtime State
-// ============================================================
-
-const runtimeState: RuntimeState = {
-  activePostureId: "default",
-};
-
-// ============================================================
-// Per-Posture Runtime State (persisted via session entries)
-// ============================================================
-
-const postureRuntimeStates: Map<string, PostureRuntimeState> = new Map();
-
-function getOrCreatePostureRuntimeState(id: string): PostureRuntimeState {
-  let state = postureRuntimeStates.get(id);
-  if (!state) {
-    state = { activationCount: 0 };
-    postureRuntimeStates.set(id, state);
-  }
-  return state;
-}
-
-function persistPostureRuntimeState(pi: ExtensionAPI): void {
-  const states: Record<string, PostureRuntimeState> = {};
-  for (const [id, state] of postureRuntimeStates) {
-    states[id] = { ...state };
-  }
-  if (Object.keys(states).length > 0) {
-    pi.appendEntry("pi-posture-state", { states });
-  }
-}
-
-function restorePostureRuntimeState(ctx: ExtensionContext): void {
-  postureRuntimeStates.clear();
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type === "custom" && entry.customType === "pi-posture-state") {
-      const data = entry.data as Record<string, unknown> | undefined;
-      const states = data?.states;
-      if (!isRecord(states)) continue;
-      for (const [id, rawState] of Object.entries(states)) {
-        const sanitized = sanitizePostureRuntimeState(rawState);
-        if (sanitized) {
-          postureRuntimeStates.set(id, sanitized);
-        }
-      }
-    }
-  }
-}
-
-function snapshotPostureRuntimeStates(): string {
-  const sorted: Record<string, PostureRuntimeState> = {};
-  for (const key of Array.from(postureRuntimeStates.keys()).sort()) {
-    sorted[key] = postureRuntimeStates.get(key)!;
-  }
-  return JSON.stringify(sorted);
-}
-
-function isValidTimestamp(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    Number.isFinite(new Date(value).getTime())
-  );
-}
-
-function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null {
-  if (!isRecord(value)) return null;
-  const { activationCount, lastActivatedAt, turnsInSession, objective } = value as Record<string, unknown>;
-  if (typeof activationCount !== "number" || !Number.isFinite(activationCount)) return null;
-  if (lastActivatedAt !== undefined && !isValidTimestamp(lastActivatedAt)) return null;
-  if (turnsInSession !== undefined) {
-    if (
-      typeof turnsInSession !== "number" ||
-      !Number.isFinite(turnsInSession) ||
-      turnsInSession < 0 ||
-      !Number.isInteger(turnsInSession)
-    )
-      return null;
-  }
-  const result: PostureRuntimeState = { activationCount };
-  if (lastActivatedAt !== undefined) result.lastActivatedAt = lastActivatedAt;
-  if (turnsInSession !== undefined) result.turnsInSession = turnsInSession;
-  if (typeof objective === "string" && objective.length > 0) result.objective = objective;
-  return result;
-}
-
-function persistIfChanged(pi: ExtensionAPI, before: string): void {
-  if (before !== snapshotPostureRuntimeStates()) {
-    persistPostureRuntimeState(pi);
-  }
-}
 
 // ============================================================
 // Runtime Helper Functions
@@ -663,8 +562,12 @@ function switchPosture(
   });
 }
 
+function shouldLoadProjectConfig(ctx: ExtensionContext): boolean {
+  return (ctx as ExtensionContext & { isProjectTrusted?: () => boolean }).isProjectTrusted?.() ?? true;
+}
+
 function reloadAndReconcile(pi: ExtensionAPI, ctx: ExtensionContext) {
-  registryLoadPostures(ctx.cwd);
+  registryLoadPostures(ctx.cwd, { loadProjectConfig: shouldLoadProjectConfig(ctx) });
   ensureActivePostureExists();
   applyRuntime(pi, ctx, activePosture());
 }
@@ -950,11 +853,7 @@ export default function piPosture(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
-    // TODO: Gate project config with ctx.isProjectTrusted() when available.
-    // Passing { loadProjectConfig: ctx.isProjectTrusted?.() ?? true } would
-    // skip project-local postures.json for untrusted projects while still
-    // loading the global config.
-    registryLoadPostures(ctx.cwd);
+    registryLoadPostures(ctx.cwd, { loadProjectConfig: shouldLoadProjectConfig(ctx) });
     ensureActivePostureExists();
     const hasSessionPosture = restorePostureFromSession(ctx);
     restorePostureRuntimeState(ctx);

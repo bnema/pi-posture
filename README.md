@@ -111,7 +111,7 @@ Built-in postures keep the full toolset available. Learning mode is cognitive gu
 
 ## Project config trust note
 
-The registry supports skipping project config via `loadProjectConfig`, but the current installed Pi API does not expose `ctx.isProjectTrusted()` in this project dependency. Trust wiring is reserved for a future dependency update.
+Project-local config is loaded only when Pi marks the project trusted through `ctx.isProjectTrusted()` when that API is available. Older Pi extension contexts without that method keep the existing behavior and load project config.
 
 ## Install
 

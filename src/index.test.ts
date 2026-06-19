@@ -20,7 +20,7 @@ function projectContext(path: string, content: string) {
   return `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
 }
 
-function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: string; branch?: any[] } = {}) {
+function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: string; branch?: any[]; projectTrusted?: boolean } = {}) {
   let commandHandler: ((args: string, ctx: any) => Promise<void>) | undefined;
   const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<void> | void>>();
   const messages: string[] = [];
@@ -74,6 +74,7 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
       },
     },
     sessionManager: { getBranch: () => options.branch ?? [] },
+    isProjectTrusted: () => options.projectTrusted ?? true,
   };
 
   piPosture(pi as any);
@@ -892,6 +893,51 @@ describe("pi-posture internals", () => {
     expect(__testing.getRegistryState().postures.get("custom")!.description).toBe(
       "Loads by default",
     );
+  });
+
+  it("runtime command reload skips project config when project is untrusted", async () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Untrusted project posture" },
+      },
+    });
+    const harness = fakeExtension(cwd, { projectTrusted: false });
+
+    await harness.run("custom");
+
+    expect(harness.messages.at(-1)).toBe("Unknown posture: custom. Try /posture list.");
+    expect(__testing.getRegistryState().postures.has("custom")).toBe(false);
+  });
+
+  it("runtime command reload loads project config when project is trusted", async () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Trusted project posture" },
+      },
+    });
+    const harness = fakeExtension(cwd, { projectTrusted: true });
+
+    await harness.run("custom");
+
+    expect(harness.messages.at(-1)).toBe("Switched to posture: custom");
+    expect(__testing.getRegistryState().postures.get("custom")?.description).toBe("Trusted project posture");
+  });
+
+  it("session_start skips untrusted project config when restoring project posture", async () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "Untrusted project posture" },
+      },
+    });
+    const harness = fakeExtension(cwd, {
+      projectTrusted: false,
+      branch: [{ type: "custom", customType: "posture", data: { id: "custom" } }],
+    });
+
+    await harness.emit("session_start", { type: "session_start", reason: "resume" });
+
+    expect(__testing.runtimeState.activePostureId).toBe("default");
+    expect(__testing.getRegistryState().postures.has("custom")).toBe(false);
   });
 
   it("global config errors still harmless when loadProjectConfig is false", () => {
