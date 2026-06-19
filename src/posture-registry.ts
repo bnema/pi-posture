@@ -41,6 +41,11 @@ export type PostureDefinition = {
   policy?: PosturePolicy;
 };
 
+/** Config-only posture entry — excludes "policy" and other internal fields
+ *  that are reserved for the registry adapter. User config must not appear
+ *  to accept policy configuration. */
+export type PostureConfigEntry = Partial<Omit<PostureDefinition, "policy">>;
+
 /** Per-posture runtime state, reserved for session persistence. */
 export type PostureRuntimeState = {
   /** Timestamp (ms since epoch) when this posture was last activated. */
@@ -60,7 +65,7 @@ export type StartupPickerConfig = {
 };
 
 export type PostureConfig = {
-  postures?: Record<string, Partial<PostureDefinition>>;
+  postures?: Record<string, PostureConfigEntry>;
   aliases?: Record<string, string>;
   startupPicker?: Partial<StartupPickerConfig> | boolean;
 };
@@ -236,6 +241,245 @@ export function withStaticPosturePolicy(def: PostureDefinition): PostureDefiniti
 }
 
 // ============================================================
+// Pure Registry Builder
+// ============================================================
+
+export type RegistryBuildResult = {
+  postures: Map<string, PostureDefinition>;
+  aliases: Map<string, string>;
+  startupPicker: StartupPickerConfig;
+  configErrors: string[];
+};
+
+/**
+ * Build a posture registry from in-memory config objects without any
+ * filesystem access or mutable module state. Pure — no side effects.
+ *
+ * @param configs  Config objects to merge in order (undefined entries are skipped).
+ * @param sources  Optional source labels for config error messages.
+ */
+export function buildPostureRegistry(
+  configs: (PostureConfig | undefined)[],
+  sources?: string[],
+): RegistryBuildResult {
+  // Start with built-ins (with static policy shim)
+  const postures = new Map<string, PostureDefinition>(
+    BUILTIN_POSTURES.map((p) => [p.id, withStaticPosturePolicy(p)]),
+  );
+  const aliases = new Map<string, string>(Object.entries(BUILTIN_ALIASES));
+  const startupPicker: StartupPickerConfig = {
+    ...DEFAULT_STARTUP_PICKER,
+    include: [...DEFAULT_STARTUP_PICKER.include],
+    reasons: [...DEFAULT_STARTUP_PICKER.reasons],
+  };
+  const configErrors: string[] = [];
+  const addErr = (msg: string) => {
+    if (!configErrors.includes(msg)) configErrors.push(msg);
+  };
+
+  for (let i = 0; i < configs.length; i++) {
+    const config = configs[i];
+    if (!config) continue;
+    const source = sources?.[i] ?? `config[${i}]`;
+
+    // --- Merge postures ---
+    if (config.postures !== undefined) {
+      if (!isRecord(config.postures)) {
+        addErr(`${source}.postures: must be an object`);
+      } else {
+        for (const [rawId, rawPosture] of Object.entries(config.postures)) {
+          const id = normalizeId(rawId);
+          if (!id) continue;
+
+          if (!isRecord(rawPosture)) {
+            addErr(`${source}.postures.${rawId}: posture must be an object`);
+            continue;
+          }
+
+          const entry = rawPosture as PostureConfigEntry;
+          const existing = postures.get(id);
+
+          const label =
+            typeof entry.label === "string"
+              ? entry.label
+              : existing?.label ?? id;
+          const description =
+            typeof entry.description === "string"
+              ? entry.description
+              : existing?.description ?? "Custom posture";
+          const promptOverlay =
+            typeof entry.promptOverlay === "string"
+              ? entry.promptOverlay
+              : existing?.promptOverlay;
+
+          let contextPolicy = existing?.contextPolicy;
+          if (entry.contextPolicy !== undefined) {
+            if (!isRecord(entry.contextPolicy)) {
+              addErr(`${source}.postures.${rawId}.contextPolicy: must be an object`);
+            } else {
+              const cp: ContextPolicy = {};
+              const cpVal = entry.contextPolicy as Record<string, unknown>;
+              if (cpVal.global !== undefined) {
+                if (validateContextDecision(cpVal.global))
+                  cp.global = cpVal.global as ContextDecision;
+                else
+                  addErr(`${source}.postures.${rawId}.contextPolicy.global: expected inherit or suppress`);
+              }
+              if (cpVal.project !== undefined) {
+                if (validateContextDecision(cpVal.project))
+                  cp.project = cpVal.project as ContextDecision;
+                else
+                  addErr(`${source}.postures.${rawId}.contextPolicy.project: expected inherit or suppress`);
+              }
+              if (Object.keys(cp).length > 0) contextPolicy = cp;
+            }
+          }
+
+          const activeTools = Array.isArray(entry.activeTools)
+            ? entry.activeTools.filter(
+                (tool): tool is string =>
+                  typeof tool === "string" && tool.trim().length > 0,
+              )
+            : existing?.activeTools;
+
+          let thinking = existing?.thinking;
+          if (entry.thinking !== undefined) {
+            if (validateThinking(entry.thinking)) {
+              thinking = entry.thinking;
+            } else {
+              addErr(`${source}.postures.${rawId}.thinking: invalid thinking level`);
+            }
+          }
+
+          postures.set(
+            id,
+            withStaticPosturePolicy({
+              id,
+              label,
+              description,
+              promptOverlay,
+              contextPolicy,
+              activeTools,
+              thinking,
+            }),
+          );
+        }
+      }
+    }
+
+    // --- Merge aliases ---
+    if (config.aliases !== undefined) {
+      if (!isRecord(config.aliases)) {
+        addErr(`${source}.aliases: must be an object`);
+      } else {
+        for (const [rawAlias, target] of Object.entries(config.aliases)) {
+          if (typeof target !== "string") {
+            addErr(`${source}.aliases.${rawAlias}: target must be a string`);
+            continue;
+          }
+          aliases.set(normalizeId(rawAlias), normalizeId(target));
+        }
+      }
+    }
+
+    // --- Merge startup picker ---
+    if (config.startupPicker !== undefined) {
+      if (typeof config.startupPicker === "boolean") {
+        startupPicker.enabled = config.startupPicker;
+      } else if (!isRecord(config.startupPicker)) {
+        addErr(`${source}.startupPicker: must be an object or boolean`);
+      } else {
+        const sp = config.startupPicker as Record<string, unknown>;
+
+        if (sp.enabled !== undefined) {
+          if (typeof sp.enabled === "boolean")
+            startupPicker.enabled = sp.enabled;
+          else addErr(`${source}.startupPicker.enabled: must be a boolean`);
+        }
+        if (sp.onlyWhenUnset !== undefined) {
+          if (typeof sp.onlyWhenUnset === "boolean")
+            startupPicker.onlyWhenUnset = sp.onlyWhenUnset;
+          else
+            addErr(`${source}.startupPicker.onlyWhenUnset: must be a boolean`);
+        }
+        if (sp.include !== undefined) {
+          if (!Array.isArray(sp.include)) {
+            addErr(`${source}.startupPicker.include: must be an array`);
+          } else {
+            const include: string[] = [];
+            sp.include.forEach((item: unknown, index: number) => {
+              if (typeof item !== "string") {
+                addErr(`${source}.startupPicker.include[${index}]: must be a string`);
+                return;
+              }
+              const id = normalizeId(item);
+              if (!id) {
+                addErr(`${source}.startupPicker.include[${index}]: must not be empty`);
+                return;
+              }
+              include.push(id);
+            });
+            startupPicker.include = include;
+          }
+        }
+        if (sp.reasons !== undefined) {
+          if (!Array.isArray(sp.reasons)) {
+            addErr(`${source}.startupPicker.reasons: must be an array`);
+          } else {
+            const reasons: SessionStartReason[] = [];
+            sp.reasons.forEach((item: unknown, index: number) => {
+              if (typeof item !== "string") {
+                addErr(`${source}.startupPicker.reasons[${index}]: must be a string`);
+                return;
+              }
+              const reason = normalizeId(item);
+              if (isConfigurableSessionStartReason(reason)) {
+                reasons.push(reason);
+              } else {
+                addErr(`${source}.startupPicker.reasons: invalid reason "${item}"`);
+              }
+            });
+            startupPicker.reasons = reasons;
+          }
+        }
+        if (sp.timeoutMs !== undefined) {
+          if (
+            typeof sp.timeoutMs === "number" &&
+            Number.isFinite(sp.timeoutMs) &&
+            sp.timeoutMs > 0
+          ) {
+            startupPicker.timeoutMs = sp.timeoutMs;
+          } else {
+            addErr(`${source}.startupPicker.timeoutMs: must be a positive number`);
+          }
+        }
+      }
+    }
+  }
+
+  // --- Normalize startup picker: resolve aliases, dedupe, remove unknown ---
+  const seen = new Set<string>();
+  const include: string[] = [];
+  for (const rawId of startupPicker.include) {
+    const normalized = normalizeId(rawId);
+    const resolved = aliases.get(normalized) ?? normalized;
+    if (!postures.has(resolved)) {
+      addErr(`startupPicker.include: unknown posture or alias "${rawId}"`);
+      continue;
+    }
+    if (seen.has(resolved)) {
+      addErr(`startupPicker.include: duplicate posture "${resolved}" from "${rawId}"`);
+      continue;
+    }
+    seen.add(resolved);
+    include.push(rawId);
+  }
+  startupPicker.include = include;
+
+  return { postures, aliases, startupPicker, configErrors };
+}
+
+// ============================================================
 // Registry State Mutators / Queries
 // ============================================================
 
@@ -326,7 +570,7 @@ function mergeStartupPicker(
 
 function normalizePosture(
   id: string,
-  value: Partial<PostureDefinition>,
+  value: PostureConfigEntry,
   source: string,
 ): PostureDefinition | undefined {
   if (!isRecord(value)) {
@@ -385,7 +629,7 @@ function mergeConfig(config: PostureConfig | undefined, source: string): void {
         if (!id) continue;
         const posture = normalizePosture(
           id,
-          rawPosture as Partial<PostureDefinition>,
+          rawPosture,
           `${source}.postures.${rawId}`,
         );
         if (posture) internalState.postures.set(id, posture);
@@ -435,10 +679,17 @@ export function resolvePostureId(input: string): string | undefined {
 }
 
 export function loadPostures(cwd: string): void {
-  resetRegistry();
-  mergeConfig(readConfig(join(getAgentDir(), "postures.json")), "global config");
-  mergeConfig(readConfig(resolve(cwd, ".pi", "postures.json")), "project config");
-  normalizeStartupPickerConfig();
+  const result = buildPostureRegistry(
+    [
+      readConfig(join(getAgentDir(), "postures.json")),
+      readConfig(resolve(cwd, ".pi", "postures.json")),
+    ],
+    ["global config", "project config"],
+  );
+  internalState.postures = result.postures;
+  internalState.aliases = result.aliases;
+  internalState.startupPicker = result.startupPicker;
+  internalState.configErrors = result.configErrors;
 }
 
 export function selectableStartupPostures(): PostureDefinition[] {

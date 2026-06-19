@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import piPosture, { __testing } from "./index.js";
-import { BUILTIN_POSTURES } from "./posture-registry.js";
+import { BUILTIN_POSTURES, buildPostureRegistry } from "./posture-registry.js";
 
 function tempProject() {
   const cwd = mkdtempSync(join(tmpdir(), "pi-posture-"));
@@ -580,5 +580,197 @@ describe("pi-posture internals", () => {
       const stored = __testing.getRegistryState().postures.get(builtIn.id)!;
       expect(stored.promptOverlay).toBe(builtIn.promptOverlay);
     }
+  });
+});
+
+// ============================================================
+// Pure registry builder tests (no filesystem, no extension runtime)
+// ============================================================
+
+describe("buildPostureRegistry (pure)", () => {
+  it("includes built-in postures and aliases with no configs", () => {
+    const result = buildPostureRegistry([]);
+    expect(result.postures.has("default")).toBe(true);
+    expect(result.postures.has("agent")).toBe(true);
+    expect(result.postures.has("learn")).toBe(true);
+    expect(result.postures.has("assist")).toBe(true);
+    expect(result.postures.has("review")).toBe(true);
+    expect(result.aliases.get("vanilla")).toBe("default");
+    expect(result.aliases.get("teacher")).toBe("learn");
+    expect(result.aliases.get("pair")).toBe("assist");
+    expect(result.aliases.get("autonomous")).toBe("agent");
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("merges config overrides for built-in postures preserving promptOverlay", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          learn: { description: "Custom learn", thinking: "low" },
+        },
+      },
+    ]);
+    const learn = result.postures.get("learn")!;
+    expect(learn.description).toBe("Custom learn");
+    expect(learn.thinking).toBe("low");
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "learn")!;
+    expect(learn.promptOverlay).toBe(builtIn.promptOverlay);
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("adds custom aliases", () => {
+    const result = buildPostureRegistry([{ aliases: { socratic: "learn" } }]);
+    expect(result.aliases.get("socratic")).toBe("learn");
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("reports validation errors for invalid thinking", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          broken: { thinking: "huge" as any },
+        },
+      },
+    ]);
+    expect(result.configErrors).toContain(
+      "config[0].postures.broken.thinking: invalid thinking level",
+    );
+  });
+
+  it("reports validation errors for contextPolicy", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          broken: { contextPolicy: { global: "nope" } as any },
+        },
+      },
+    ]);
+    expect(result.configErrors).toContain(
+      "config[0].postures.broken.contextPolicy.global: expected inherit or suppress",
+    );
+  });
+
+  it("applies startup picker config", () => {
+    const result = buildPostureRegistry([
+      {
+        startupPicker: {
+          enabled: true,
+          include: ["learn", "pair"],
+          reasons: ["startup", "new"],
+          timeoutMs: 2500,
+        },
+      },
+    ]);
+    expect(result.startupPicker.enabled).toBe(true);
+    expect(result.startupPicker.reasons).toEqual(["startup", "new"]);
+    expect(result.startupPicker.timeoutMs).toBe(2500);
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("resolves aliases and deduplicates in startup picker include", () => {
+    const result = buildPostureRegistry([
+      {
+        startupPicker: {
+          enabled: true,
+          include: ["learn", "teacher", "missing"],
+          reasons: ["startup", "reload"],
+        },
+      },
+    ]);
+    // "teacher" resolves to "learn" → duplicate; "missing" is unknown;
+    // only "learn" should survive normalization
+    expect(result.startupPicker.include).toEqual(["learn"]);
+    expect(result.configErrors).toContain(
+      'startupPicker.include: duplicate posture "learn" from "teacher"',
+    );
+    expect(result.configErrors).toContain(
+      'startupPicker.include: unknown posture or alias "missing"',
+    );
+  });
+
+  it("reports validation errors for startup picker include and reasons", () => {
+    const result = buildPostureRegistry([
+      {
+        startupPicker: {
+          include: ["" as any, "learn", 123 as any],
+          reasons: ["reload" as any, 456 as any],
+        },
+      },
+    ]);
+    expect(result.configErrors).toContain(
+      "config[0].startupPicker.include[0]: must not be empty",
+    );
+    expect(result.configErrors).toContain(
+      "config[0].startupPicker.include[2]: must be a string",
+    );
+    expect(result.configErrors).toContain(
+      'config[0].startupPicker.reasons: invalid reason "reload"',
+    );
+    expect(result.configErrors).toContain(
+      "config[0].startupPicker.reasons[1]: must be a string",
+    );
+  });
+
+  it("resolves custom aliases through the startup picker normalizer", () => {
+    const result = buildPostureRegistry([
+      { aliases: { socratic: "learn" } },
+      {
+        startupPicker: {
+          enabled: true,
+          include: ["socratic"],
+        },
+      },
+    ]);
+    // "socratic" resolves to "learn" → known posture, kept
+    expect(result.startupPicker.include).toEqual(["socratic"]);
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("handles undefined configs in the array", () => {
+    const result = buildPostureRegistry([
+      undefined,
+      { aliases: { socratic: "learn" } },
+    ]);
+    expect(result.aliases.get("socratic")).toBe("learn");
+    expect(result.postures.size).toBe(5);
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("multiple configs overlay correctly", () => {
+    const result = buildPostureRegistry([
+      { aliases: { socratic: "learn" } },
+      { postures: { custom: { description: "Custom" } } },
+    ]);
+    expect(result.aliases.get("socratic")).toBe("learn");
+    expect(result.postures.has("custom")).toBe(true);
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("does not leak policy field through config posture entry", () => {
+    // Even when policy is passed through a wide cast, the builder
+    // never reads it — it only reads PostureConfigEntry fields.
+    const entry: Record<string, unknown> = { description: "No policy" };
+    entry.policy = { type: "custom" };
+    const result = buildPostureRegistry([{ postures: { test: entry } }]);
+    const posture = result.postures.get("test")!;
+    // withStaticPosturePolicy adds static when no policy is present
+    expect(posture.policy?.type).toBe("static");
+  });
+
+  it("adds static policy to built-in postures from builder", () => {
+    const result = buildPostureRegistry([]);
+    for (const posture of result.postures.values()) {
+      expect(posture.policy).toBeDefined();
+      expect(posture.policy!.type).toBe("static");
+    }
+  });
+
+  it("adds static policy to custom postures from builder", () => {
+    const result = buildPostureRegistry([
+      { postures: { custom: { description: "Custom posture" } } },
+    ]);
+    const posture = result.postures.get("custom")!;
+    expect(posture.policy).toBeDefined();
+    expect(posture.policy!.type).toBe("static");
   });
 });
