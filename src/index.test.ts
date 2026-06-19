@@ -531,9 +531,10 @@ describe("pi-posture internals", () => {
     for (const posture of reg.postures.values()) {
       expect(posture.policy).toBeDefined();
     }
-    // Agent has a built-in custom policy; others are static
+    // Agent and assist have built-in custom policies; others are static
     expect(reg.postures.get("agent")!.policy!.type).toBe("custom");
-    for (const id of ["default", "assist", "learn", "review"]) {
+    expect(reg.postures.get("assist")!.policy!.type).toBe("custom");
+    for (const id of ["default", "learn", "review"]) {
       expect(reg.postures.get(id)!.policy!.type).toBe("static");
     }
   });
@@ -2020,6 +2021,156 @@ describe("agent built-in policy", () => {
 });
 
 // ============================================================
+// Assist built-in policy tests (Phase 3 Task 10)
+// ============================================================
+
+describe("assist built-in policy", () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = tempProject();
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("assist posture has a built-in custom policy with onBeforeAgentStart", () => {
+    __testing.resetRegistry();
+    const assist = __testing.getRegistryState().postures.get("assist")!;
+    expect(assist.policy).toBeDefined();
+    expect(assist.policy!.type).toBe("custom");
+    expect(assist.policy!.onBeforeAgentStart).toBeDefined();
+  });
+
+  it("assist onBeforeAgentStart appends dynamic guidance after static overlay", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "assist";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base system prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Static overlay present
+    expect(result!.systemPrompt).toContain("base system prompt");
+    expect(result!.systemPrompt).toContain('<pi_posture id="assist">');
+    expect(result!.systemPrompt).toContain("primary implementer");
+    // Dynamic guidance appended
+    expect(result!.systemPrompt).toContain("Assist Guidance");
+    expect(result!.systemPrompt).toContain("primary implementer — you are their pair");
+    expect(result!.systemPrompt).toContain("narrow");
+    expect(result!.systemPrompt).toContain("broad edits");
+  });
+
+  it("assist dynamic guidance is absent when default posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "default";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // No assist overlay or dynamic guidance
+    expect(result!.systemPrompt).not.toContain('<pi_posture id="assist">');
+    expect(result!.systemPrompt).not.toContain("Assist Guidance");
+    expect(result!.systemPrompt).not.toContain("primary implementer");
+    expect(result!.systemPrompt).not.toContain("narrow");
+    expect(result!.systemPrompt).not.toContain("broad edits");
+    // Plain base
+    expect(result!.systemPrompt).toBe("base prompt");
+  });
+
+  it("assist dynamic guidance is absent when another non-assist posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Learn overlay present, but no assist dynamic guidance
+    expect(result!.systemPrompt).not.toContain("Assist Guidance");
+    expect(result!.systemPrompt).not.toContain("primary implementer — you are their pair");
+    expect(result!.systemPrompt).not.toContain("broad edits");
+  });
+
+  it("config override for assist preserves its custom policy", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          assist: { description: "Custom assist", thinking: "minimal" },
+        },
+      },
+    ]);
+    const assist = result.postures.get("assist")!;
+    expect(assist.description).toBe("Custom assist");
+    expect(assist.thinking).toBe("minimal");
+    expect(assist.policy).toBeDefined();
+    expect(assist.policy!.type).toBe("custom");
+    expect(assist.policy!.onBeforeAgentStart).toBeDefined();
+  });
+
+  it("assist prompt overlay remains intact after config description override", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          assist: { description: "Custom assist description" },
+        },
+      },
+    ]);
+    const assist = result.postures.get("assist")!;
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "assist")!;
+    expect(assist.description).toBe("Custom assist description");
+    expect(assist.promptOverlay).toBe(builtIn.promptOverlay);
+    expect(assist.policy!.type).toBe("custom");
+  });
+
+  it("assist policy hook uses custom policy dispatch (not static)", () => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "assist";
+
+    const spy = vi.fn();
+    __testing.callPolicyHook(spy, {
+      prompt: "test",
+      systemPrompt: "base",
+    });
+
+    // Assist has custom policy, so hooks should be called
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "assist" }),
+      expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
+    );
+  });
+});
+
+// ============================================================
 // Pure registry builder tests (no filesystem, no extension runtime)
 // ============================================================
 
@@ -2199,7 +2350,8 @@ describe("buildPostureRegistry (pure)", () => {
       expect(posture.policy).toBeDefined();
     }
     expect(result.postures.get("agent")!.policy!.type).toBe("custom");
-    for (const id of ["default", "assist", "learn", "review"]) {
+    expect(result.postures.get("assist")!.policy!.type).toBe("custom");
+    for (const id of ["default", "learn", "review"]) {
       expect(result.postures.get(id)!.policy!.type).toBe("static");
     }
   });

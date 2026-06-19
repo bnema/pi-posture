@@ -206,6 +206,26 @@ export const BUILTIN_AGENT_POLICY: PosturePolicy = {
   },
 };
 
+/** Built-in assist policy providing dynamic guidance around human ownership
+ *  and guarded next-step behavior. This is an internal policy that uses the
+ *  same runtime hook dispatch mechanism as user-supplied custom policies,
+ *  but is wired in code rather than via JSON config. */
+export const BUILTIN_ASSIST_POLICY: PosturePolicy = {
+  type: "custom",
+
+  onBeforeAgentStart: () => {
+    return {
+      systemPrompt:
+        "## Assist Guidance\n" +
+        "\n" +
+        "The user remains the primary implementer — you are their pair. Do not take over or make broad edits unless explicitly asked to do so.\n" +
+        "Propose narrow, specific next steps. Offer to inspect, run, verify, or explain local context.\n" +
+        "Highlight trade-offs and risks before suggesting changes.\n" +
+        "If the user asks you to take the wheel, offer to switch to agent posture or proceed only with explicit permission.",
+    };
+  },
+};
+
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   enabled: false,
   onlyWhenUnset: true,
@@ -237,6 +257,7 @@ The user explicitly wants delegated agentic execution. Move work forward with co
     promptOverlay: `You are in assist posture.
 
 The user remains the primary implementer. Use tools freely to inspect code, fetch docs, run verification, and explain local context. Give the next small step, highlight trade-offs and risks, and offer narrow help. Do not take over core implementation or make broad edits unless the user explicitly asks you to do so.`,
+    policy: BUILTIN_ASSIST_POLICY,
   },
   {
     id: "learn",
