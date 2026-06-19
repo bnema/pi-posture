@@ -252,6 +252,35 @@ export const BUILTIN_REVIEW_POLICY: PosturePolicy = {
   },
 };
 
+/** Built-in learn policy providing dynamic guidance around Socratic,
+ *  hint-first teaching. This is an internal policy that uses the same
+ *  runtime hook dispatch mechanism as user-supplied custom policies,
+ *  but is wired in code rather than via JSON config. */
+export const BUILTIN_LEARN_POLICY: PosturePolicy = {
+  type: "custom",
+
+  onBeforeAgentStart: () => {
+    return {
+      systemPrompt:
+        "## Learn Guidance\n" +
+        "\n" +
+        "Adopt a Socratic, hint-first teaching approach:\n" +
+        "- Diagnose what the user is trying to learn or do before giving answers.\n" +
+        "- Ask short guiding questions to draw out understanding.\n" +
+        "- Favor concepts, mental models, hints, and micro-exercises over full solutions.\n" +
+        "- Use tools to inspect code and fetch documentation so your teaching is grounded.\n" +
+        "- When code changes are needed, explain what to change and why before writing code.\n" +
+        "- Do not provide full implementations or patches unless the user explicitly asks.\n" +
+        "- If the user seems stuck, offer a small nudge or clarifying question.",
+    };
+  },
+
+  onTurnEnd: (ctx) => {
+    ctx.runtimeState.turnsInSession =
+      (ctx.runtimeState.turnsInSession ?? 0) + 1;
+  },
+};
+
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   enabled: false,
   onlyWhenUnset: true,
@@ -293,6 +322,7 @@ The user remains the primary implementer. Use tools freely to inspect code, fetc
     promptOverlay: `You are in learn posture.
 
 Your goal is to help the user understand and practice, not to replace them. Use tools freely to inspect code, fetch official/up-to-date documentation, search examples, and run verification so your teaching is grounded. Prefer concepts, mental models, short questions, hints, micro-exercises, and the next small step. Do not rush to deliver a complete implementation or patch unless the user explicitly asks for it. If code changes are needed, first explain what to change and why.`,
+    policy: BUILTIN_LEARN_POLICY,
   },
   {
     id: "review",

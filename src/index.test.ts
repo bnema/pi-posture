@@ -531,13 +531,12 @@ describe("pi-posture internals", () => {
     for (const posture of reg.postures.values()) {
       expect(posture.policy).toBeDefined();
     }
-    // Agent, assist, and review have built-in custom policies; others are static
+    // Agent, assist, learn, and review have built-in custom policies; default is static
     expect(reg.postures.get("agent")!.policy!.type).toBe("custom");
     expect(reg.postures.get("assist")!.policy!.type).toBe("custom");
+    expect(reg.postures.get("learn")!.policy!.type).toBe("custom");
     expect(reg.postures.get("review")!.policy!.type).toBe("custom");
-    for (const id of ["default", "learn"]) {
-      expect(reg.postures.get(id)!.policy!.type).toBe("static");
-    }
+    expect(reg.postures.get("default")!.policy!.type).toBe("static");
   });
 
   it("adds static policy to custom config postures", () => {
@@ -2403,6 +2402,240 @@ describe("review built-in policy", () => {
 });
 
 // ============================================================
+// Learn built-in policy tests (Phase 3 Task 12)
+// ============================================================
+
+describe("learn built-in policy", () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = tempProject();
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("learn posture has a built-in custom policy with onBeforeAgentStart and onTurnEnd", () => {
+    __testing.resetRegistry();
+    const learn = __testing.getRegistryState().postures.get("learn")!;
+    expect(learn.policy).toBeDefined();
+    expect(learn.policy!.type).toBe("custom");
+    expect(learn.policy!.onBeforeAgentStart).toBeDefined();
+    expect(learn.policy!.onTurnEnd).toBeDefined();
+  });
+
+  it("learn onBeforeAgentStart appends hint-first/Socratic dynamic guidance after static overlay", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base system prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Static overlay present
+    expect(result!.systemPrompt).toContain("base system prompt");
+    expect(result!.systemPrompt).toContain('<pi_posture id="learn">');
+    expect(result!.systemPrompt).toContain("understand and practice");
+    // Dynamic guidance appended
+    expect(result!.systemPrompt).toContain("Learn Guidance");
+    expect(result!.systemPrompt).toContain("hint-first");
+    expect(result!.systemPrompt).toContain("Socratic");
+    expect(result!.systemPrompt).toContain("guiding questions");
+    expect(result!.systemPrompt).toContain("micro-exercises");
+    expect(result!.systemPrompt).toContain("full implementations");
+  });
+
+  it("learn onTurnEnd tracks turns in runtime state", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("learn").turnsInSession,
+    ).toBe(1);
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 1,
+      timestamp: 200,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("learn").turnsInSession,
+    ).toBe(2);
+
+    // Switching away stops increment
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 2,
+      timestamp: 300,
+    });
+    expect(
+      __testing.getOrCreatePostureRuntimeState("learn").turnsInSession,
+    ).toBe(2);
+  });
+
+  it("learn dynamic guidance is absent when default posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "default";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base prompt",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // No learn overlay or dynamic guidance
+    expect(result!.systemPrompt).not.toContain('<pi_posture id="learn">');
+    expect(result!.systemPrompt).not.toContain("Learn Guidance");
+    expect(result!.systemPrompt).not.toContain("hint-first");
+    expect(result!.systemPrompt).not.toContain("Socratic");
+    // Plain base
+    expect(result!.systemPrompt).toBe("base prompt");
+  });
+
+  it("learn dynamic guidance is absent when another non-learn posture is active", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "agent";
+
+    const results = await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const result = results.find(
+      (r: any) => r && "systemPrompt" in r,
+    ) as { systemPrompt: string } | undefined;
+    expect(result).toBeDefined();
+    // Agent overlay present, but no learn dynamic guidance
+    expect(result!.systemPrompt).not.toContain("Learn Guidance");
+    expect(result!.systemPrompt).not.toContain("hint-first");
+    expect(result!.systemPrompt).not.toContain("Socratic");
+    expect(result!.systemPrompt).not.toContain("guiding questions");
+    expect(result!.systemPrompt).not.toContain("micro-exercises");
+  });
+
+  it("learn onBeforeAgentStart is not invoked when inactive", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "assist";
+
+    await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    // Turn end on assist shouldn't affect learn's runtime state
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+
+    expect(
+      __testing.getOrCreatePostureRuntimeState("learn").turnsInSession,
+    ).toBeUndefined();
+  });
+
+  it("config override for learn preserves its custom policy", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          learn: { description: "Custom learn", thinking: "high" },
+        },
+      },
+    ]);
+    const learn = result.postures.get("learn")!;
+    expect(learn.description).toBe("Custom learn");
+    expect(learn.thinking).toBe("high");
+    expect(learn.policy).toBeDefined();
+    expect(learn.policy!.type).toBe("custom");
+    expect(learn.policy!.onBeforeAgentStart).toBeDefined();
+    expect(learn.policy!.onTurnEnd).toBeDefined();
+  });
+
+  it("learn prompt overlay remains intact after config description override", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          learn: { description: "Custom learn description" },
+        },
+      },
+    ]);
+    const learn = result.postures.get("learn")!;
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "learn")!;
+    expect(learn.description).toBe("Custom learn description");
+    expect(learn.promptOverlay).toBe(builtIn.promptOverlay);
+    expect(learn.policy!.type).toBe("custom");
+  });
+
+  it("learn policy hook uses custom policy dispatch (not static)", () => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "learn";
+
+    const spy = vi.fn();
+    __testing.callPolicyHook(spy, {
+      prompt: "test",
+      systemPrompt: "base",
+    });
+
+    // Learn has custom policy, so hooks should be called
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "learn" }),
+      expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
+    );
+  });
+
+  it("learn turnsInSession does not carry over after switching away", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 0,
+      timestamp: 100,
+    });
+
+    __testing.runtimeState.activePostureId = "default";
+    await harness.emit("turn_end", {
+      type: "turn_end",
+      turnIndex: 1,
+      timestamp: 200,
+    });
+
+    // Learn state should still be 1 (not incremented by default's turn_end)
+    expect(
+      __testing.getOrCreatePostureRuntimeState("learn").turnsInSession,
+    ).toBe(1);
+  });
+});
+
+// ============================================================
 // Pure registry builder tests (no filesystem, no extension runtime)
 // ============================================================
 
@@ -2583,10 +2816,9 @@ describe("buildPostureRegistry (pure)", () => {
     }
     expect(result.postures.get("agent")!.policy!.type).toBe("custom");
     expect(result.postures.get("assist")!.policy!.type).toBe("custom");
+    expect(result.postures.get("learn")!.policy!.type).toBe("custom");
     expect(result.postures.get("review")!.policy!.type).toBe("custom");
-    for (const id of ["default", "learn"]) {
-      expect(result.postures.get(id)!.policy!.type).toBe("static");
-    }
+    expect(result.postures.get("default")!.policy!.type).toBe("static");
   });
 
   it("adds static policy to custom postures from builder", () => {
