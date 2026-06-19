@@ -3543,4 +3543,37 @@ describe("buildPostureRegistry (pure)", () => {
     );
   });
 
+  it("unknown extra fields in config posture entry do not crash or leak into posture definition", () => {
+    const entry: Record<string, unknown> = {
+      description: "Posture with extra fields",
+      interactionStyle: "assistive",
+      unknownProperty: "should be ignored",
+      anotherUnexpected: 42,
+    };
+    const result = buildPostureRegistry([{ postures: { test: entry } }]);
+    const posture = result.postures.get("test")!;
+    // Known fields are loaded
+    expect(posture.description).toBe("Posture with extra fields");
+    expect(posture.interactionStyle).toBe("assistive");
+    // Unknown fields are NOT in the posture definition
+    expect((posture as any).unknownProperty).toBeUndefined();
+    expect((posture as any).anotherUnexpected).toBeUndefined();
+    // No config errors from unknown fields
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("unknown extra fields at config root do not crash", () => {
+    const config: Record<string, unknown> = {
+      unknownRootField: "should not crash",
+      someDeep: { nested: "ignored" },
+    };
+    config.postures = {
+      test: { description: "Posture under extra root field" },
+    };
+    const result = buildPostureRegistry([config]);
+    const posture = result.postures.get("test")!;
+    expect(posture.description).toBe("Posture under extra root field");
+    expect(result.configErrors).toEqual([]);
+  });
+
 });
