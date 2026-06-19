@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   addConfigError,
   getRegistryState,
+  isRecord,
   loadPostures as registryLoadPostures,
   normalizeId,
   resetRegistry,
@@ -90,15 +91,40 @@ function restorePostureRuntimeState(ctx: ExtensionContext): void {
   postureRuntimeStates.clear();
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type === "custom" && entry.customType === "pi-posture-state") {
-      const data = entry.data as
-        | { states?: Record<string, PostureRuntimeState> }
-        | undefined;
-      if (data?.states) {
-        for (const [id, state] of Object.entries(data.states)) {
-          postureRuntimeStates.set(id, state);
+      const data = entry.data as Record<string, unknown> | undefined;
+      const states = data?.states;
+      if (!isRecord(states)) continue;
+      for (const [id, rawState] of Object.entries(states)) {
+        const sanitized = sanitizePostureRuntimeState(rawState);
+        if (sanitized) {
+          postureRuntimeStates.set(id, sanitized);
         }
       }
     }
+  }
+}
+
+function snapshotPostureRuntimeStates(): string {
+  const sorted: Record<string, PostureRuntimeState> = {};
+  for (const key of Array.from(postureRuntimeStates.keys()).sort()) {
+    sorted[key] = postureRuntimeStates.get(key)!;
+  }
+  return JSON.stringify(sorted);
+}
+
+function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null {
+  if (!isRecord(value)) return null;
+  const { activationCount, lastActivatedAt } = value as Record<string, unknown>;
+  if (typeof activationCount !== "number" || !Number.isFinite(activationCount)) return null;
+  if (lastActivatedAt !== undefined && (typeof lastActivatedAt !== "number" || !Number.isFinite(lastActivatedAt))) return null;
+  const result: PostureRuntimeState = { activationCount };
+  if (lastActivatedAt !== undefined) result.lastActivatedAt = lastActivatedAt;
+  return result;
+}
+
+function persistIfChanged(pi: ExtensionAPI, before: string): void {
+  if (before !== snapshotPostureRuntimeStates()) {
+    persistPostureRuntimeState(pi);
   }
 }
 
@@ -581,6 +607,25 @@ function callPolicyHook<T extends (...args: any[]) => any>(
   return hook(activePolicyContext(), ...args);
 }
 
+function callPolicyHookAndPersist<T extends (...args: any[]) => any>(
+  pi: ExtensionAPI,
+  hook: T | undefined,
+  ...args: T extends (ctx: PolicyHookContext, ...rest: infer R) => any ? R : never
+): ReturnType<T> | undefined {
+  const posture = activePosture();
+  const policy = posture.policy;
+  if (!policy || policy.type !== "custom" || !hook) return undefined;
+  // Build context first — may create runtime state entry for this posture
+  const ctx = activePolicyContext();
+  const before = snapshotPostureRuntimeStates();
+  const result = hook(ctx, ...args);
+  const after = snapshotPostureRuntimeStates();
+  if (before !== after) {
+    persistPostureRuntimeState(pi);
+  }
+  return result;
+}
+
 // ============================================================
 // Test Surface
 // ============================================================
@@ -617,6 +662,9 @@ export const __testing = {
   postureLabel,
   activePolicyContext,
   callPolicyHook,
+  callPolicyHookAndPersist,
+  snapshotPostureRuntimeStates,
+  sanitizePostureRuntimeState,
 
   // Test helpers
   setPostureDefinition(id: string, def: PostureDefinition) {
@@ -727,7 +775,7 @@ export default function piPosture(pi: ExtensionAPI) {
       event.reason,
       hasSessionPosture,
     );
-    callPolicyHook(activePosture().policy?.onSessionStart);
+    callPolicyHookAndPersist(pi, activePosture().policy?.onSessionStart);
     const reg = getRegistryState();
     if (reg.configErrors.length > 0 && ctx.hasUI) {
       ctx.ui.notify(
@@ -754,10 +802,13 @@ export default function piPosture(pi: ExtensionAPI) {
         prompt: event.prompt,
         systemPrompt: event.systemPrompt,
       };
+      const policyCtx = activePolicyContext();
+      const before = snapshotPostureRuntimeStates();
       const hookResult = policy.onBeforeAgentStart(
-        activePolicyContext(),
+        policyCtx,
         hookInput,
       );
+      persistIfChanged(pi, before);
       if (hookResult?.systemPrompt) {
         systemPrompt = `${systemPrompt}\n${hookResult.systemPrompt}`;
       }
@@ -772,7 +823,10 @@ export default function piPosture(pi: ExtensionAPI) {
     const hook = policy.onInput;
     if (!hook) return;
     const hookInput: PolicyInputInput = { text: event.text };
-    const result = hook(activePolicyContext(), hookInput);
+    const policyCtx = activePolicyContext();
+    const before = snapshotPostureRuntimeStates();
+    const result = hook(policyCtx, hookInput);
+    persistIfChanged(pi, before);
     if (!result) return;
     // Map policy hook result to Pi InputEventResult
     if (result.action === "handled") {
@@ -796,8 +850,11 @@ export default function piPosture(pi: ExtensionAPI) {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
     };
-    // PolicyToolCallResult is structurally identical to ToolCallEventResult
-    return hook(activePolicyContext(), hookInput);
+    const policyCtx = activePolicyContext();
+    const before = snapshotPostureRuntimeStates();
+    const result = hook(policyCtx, hookInput);
+    persistIfChanged(pi, before);
+    return result;
   });
 
   pi.on("tool_result", (event) => {
@@ -809,7 +866,10 @@ export default function piPosture(pi: ExtensionAPI) {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
     };
-    const result = hook(activePolicyContext(), hookInput);
+    const policyCtx = activePolicyContext();
+    const before = snapshotPostureRuntimeStates();
+    const result = hook(policyCtx, hookInput);
+    persistIfChanged(pi, before);
     if (!result) return;
     // Patch content/isError into the result, preserving original content if not patched
     return {
@@ -819,14 +879,14 @@ export default function piPosture(pi: ExtensionAPI) {
   });
 
   pi.on("turn_end", () => {
-    callPolicyHook(activePosture().policy?.onTurnEnd);
+    callPolicyHookAndPersist(pi, activePosture().policy?.onTurnEnd);
   });
 
   pi.on("agent_end", () => {
-    callPolicyHook(activePosture().policy?.onAgentEnd);
+    callPolicyHookAndPersist(pi, activePosture().policy?.onAgentEnd);
   });
 
   pi.on("session_shutdown", () => {
-    callPolicyHook(activePosture().policy?.onSessionShutdown);
+    callPolicyHookAndPersist(pi, activePosture().policy?.onSessionShutdown);
   });
 }

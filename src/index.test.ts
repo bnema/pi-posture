@@ -702,6 +702,73 @@ describe("pi-posture internals", () => {
     expect(restored).toBe(true);
     expect(__testing.runtimeState.activePostureId).toBe("learn");
   });
+
+  it("ignores malformed pi-posture-state entries with non-finite activationCount", () => {
+    const branch = [
+      { type: "custom", customType: "pi-posture-state", data: { states: { bad: { activationCount: "three" } } } },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    expect(__testing.postureRuntimeStates.has("bad")).toBe(false);
+  });
+
+  it("ignores malformed pi-posture-state entries with non-finite lastActivatedAt", () => {
+    const branch = [
+      { type: "custom", customType: "pi-posture-state", data: { states: { bad: { activationCount: 1, lastActivatedAt: "yesterday" } } } },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    expect(__testing.postureRuntimeStates.has("bad")).toBe(false);
+  });
+
+  it("ignores non-object state values in pi-posture-state entries", () => {
+    const branch = [
+      { type: "custom", customType: "pi-posture-state", data: { states: { bad: null } } },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    expect(__testing.postureRuntimeStates.has("bad")).toBe(false);
+  });
+
+  it("restored state objects are cloned (mutating branch data does not affect runtime state)", () => {
+    const branchData = { states: { agent: { activationCount: 5, lastActivatedAt: 100 } } };
+    const branch = [
+      { type: "custom", customType: "pi-posture-state", data: branchData },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    // Mutate branch data reference
+    branchData.states.agent.activationCount = 99;
+    // Restored state should be a clone, unchanged
+    expect(__testing.getOrCreatePostureRuntimeState("agent").activationCount).toBe(5);
+  });
+
+  it("sanitizePostureRuntimeState rejects invalid inputs", () => {
+    expect(__testing.sanitizePostureRuntimeState(null)).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState("string")).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState([])).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState(42)).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: "three" })).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: 3, lastActivatedAt: "yesterday" })).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: NaN })).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: Infinity })).toBeNull();
+  });
+
+  it("sanitizePostureRuntimeState accepts valid inputs and returns fresh objects", () => {
+    const raw = { activationCount: 5, lastActivatedAt: 1000, extraField: "ignored" };
+    const result = __testing.sanitizePostureRuntimeState(raw);
+    expect(result).toEqual({ activationCount: 5, lastActivatedAt: 1000 });
+    // Fresh object, not the same reference
+    expect(result).not.toBe(raw);
+    // Minimal (only required field)
+    const minimal = __testing.sanitizePostureRuntimeState({ activationCount: 1 });
+    expect(minimal).toEqual({ activationCount: 1 });
+  });
+
+  it("sanitizePostureRuntimeState accepts valid input with missing optional lastActivatedAt", () => {
+    const result = __testing.sanitizePostureRuntimeState({ activationCount: 0 });
+    expect(result).toEqual({ activationCount: 0 });
+  });
 });
 
 // ============================================================
@@ -1436,6 +1503,198 @@ describe("policy hook dispatch", () => {
     expect(policy.onTurnEnd).not.toHaveBeenCalled();
     expect(policy.onAgentEnd).not.toHaveBeenCalled();
     expect(policy.onSessionShutdown).not.toHaveBeenCalled();
+  });
+
+  // ---- Runtime state hook persistence ----
+
+  it("mutating runtime state in input hook persists exactly one pi-posture-state entry", async () => {
+    const policy = createCustomPolicy();
+    policy.onInput = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return undefined;
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("input", { type: "input", text: "hello", source: "interactive" });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    expect((stateEntries[0].data as any).states.tracked.activationCount).toBe(1);
+    expect(policy.onInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("no-op input hook does not append pi-posture-state entry", async () => {
+    const policy = createCustomPolicy();
+    policy.onInput = vi.fn().mockReturnValue(undefined);
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("input", { type: "input", text: "hello", source: "interactive" });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(0);
+  });
+
+  it("mutating runtime state in turn_end hook persists exactly one pi-posture-state entry", async () => {
+    const policy = createCustomPolicy();
+    policy.onTurnEnd = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, timestamp: 100 });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    expect((stateEntries[0].data as any).states.tracked.activationCount).toBe(1);
+  });
+
+  it("input hook that mutates runtime state and transforms text persists and returns correctly", async () => {
+    const policy = createCustomPolicy();
+    policy.onInput = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return { action: "transform", text: "transformed" };
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    const results = await harness.emit("input", { type: "input", text: "original", source: "interactive" });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    const transformResult = results.find((r: any) => r?.action === "transform");
+    expect(transformResult).toBeDefined();
+    expect(transformResult!.text).toBe("transformed");
+  });
+
+  it("mutating runtime state in tool_call hook persists and block still works", async () => {
+    const policy = createCustomPolicy();
+    policy.onToolCall = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return { block: true, reason: "not now" };
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    const results = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "rm -rf /" },
+    });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    const blockResult = results.find((r: any) => r?.block === true);
+    expect(blockResult).toBeDefined();
+    expect(blockResult!.reason).toBe("not now");
+  });
+
+  it("mutating runtime state in tool_result hook persists and patch still works", async () => {
+    const policy = createCustomPolicy();
+    policy.onToolResult = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return { content: [{ type: "text", text: "patched" }] };
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    const results = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "ls" },
+      content: [{ type: "text", text: "original" }],
+      isError: false,
+    });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    const patchResult = results.find((r: any) => r?.content);
+    expect(patchResult).toBeDefined();
+    expect(patchResult!.content![0].text).toBe("patched");
+  });
+
+  it("mutating runtime state in before_agent_start hook persists and overlay still works", async () => {
+    const policy = createCustomPolicy();
+    policy.onBeforeAgentStart = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return { systemPrompt: "extra" };
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("before_agent_start", {
+      prompt: "test",
+      systemPrompt: "base",
+      systemPromptOptions: { cwd: "/tmp" },
+    });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    expect((stateEntries[0].data as any).states.tracked.activationCount).toBe(1);
+  });
+
+  it("no-op session_shutdown hook does not append pi-posture-state entry", async () => {
+    const policy = createCustomPolicy();
+    policy.onSessionShutdown = vi.fn(); // no-op
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(0);
+    expect(policy.onSessionShutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("mutating runtime state in session_shutdown hook persists", async () => {
+    const policy = createCustomPolicy();
+    policy.onSessionShutdown = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    expect((stateEntries[0].data as any).states.tracked.activationCount).toBe(1);
+  });
+
+  it("no-op turn_end hook does not append pi-posture-state entry", async () => {
+    const policy = createCustomPolicy();
+    policy.onTurnEnd = vi.fn(); // no-op
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, timestamp: 100 });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(0);
   });
 
   it("session_start restores per-posture runtime state and before_agent_start hook observes it", async () => {
