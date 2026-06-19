@@ -774,6 +774,67 @@ describe("pi-posture internals", () => {
     const result = __testing.sanitizePostureRuntimeState({ activationCount: 0 });
     expect(result).toEqual({ activationCount: 0 });
   });
+
+  // ============================================================
+  // Declarative policy config fields (Phase 4 Task 14)
+  // ============================================================
+
+  it("new field values survive full loadPostures cycle", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: {
+          label: "Custom",
+          description: "Custom with declarative fields",
+          interactionStyle: "review",
+          mutationPolicy: "read-mostly",
+          answerPolicy: "explicit-request",
+          statusLabel: "🔍 review",
+          dynamicPrompt: "review-focused",
+        },
+      },
+    });
+    __testing.loadPostures(cwd);
+    const posture = __testing.getRegistryState().postures.get("custom")!;
+    expect(posture.interactionStyle).toBe("review");
+    expect(posture.mutationPolicy).toBe("read-mostly");
+    expect(posture.answerPolicy).toBe("explicit-request");
+    expect(posture.statusLabel).toBe("🔍 review");
+    expect(posture.dynamicPrompt).toBe("review-focused");
+  });
+
+  it("new fields are shown in inspect output", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: {
+          label: "Custom",
+          description: "Custom posture",
+          interactionStyle: "assistive",
+          mutationPolicy: "guarded",
+          answerPolicy: "hint-first",
+          statusLabel: "🤝 assist",
+          dynamicPrompt: "socratic",
+        },
+      },
+    });
+    __testing.loadPostures(cwd);
+    __testing.runtimeState.activePostureId = "custom";
+    const text = __testing.inspectText();
+    expect(text).toContain("Interaction style: assistive");
+    expect(text).toContain("Mutation policy: guarded");
+    expect(text).toContain("Answer policy: hint-first");
+    expect(text).toContain("Status label: 🤝 assist");
+    expect(text).toContain("Dynamic prompt: socratic");
+  });
+
+  it("new fields show as none in inspect for built-in postures", () => {
+    __testing.runtimeState.activePostureId = "default";
+    const text = __testing.inspectText();
+    expect(text).toContain("Interaction style: none");
+    expect(text).toContain("Mutation policy: none");
+    expect(text).toContain("Answer policy: none");
+    expect(text).toContain("Status label: none");
+    expect(text).toContain("Dynamic prompt: none");
+  });
 });
 
 // ============================================================
@@ -3219,4 +3280,154 @@ describe("buildPostureRegistry (pure)", () => {
     expect(posture.thinking).toBe("high");
     expect(result.configErrors).toEqual([]);
   });
+
+  // ============================================================
+  // Declarative policy config fields (Phase 4 Task 14)
+  // ============================================================
+
+  it("supports new declarative fields in posture config", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          custom: {
+            label: "Custom Policy",
+            description: "Custom posture with declarative policy fields",
+            interactionStyle: "assistive",
+            mutationPolicy: "guarded",
+            answerPolicy: "hint-first",
+            statusLabel: "🤝 assist",
+            dynamicPrompt: "socratic",
+          },
+        },
+      },
+    ]);
+    const posture = result.postures.get("custom")!;
+    expect(posture.interactionStyle).toBe("assistive");
+    expect(posture.mutationPolicy).toBe("guarded");
+    expect(posture.answerPolicy).toBe("hint-first");
+    expect(posture.statusLabel).toBe("🤝 assist");
+    expect(posture.dynamicPrompt).toBe("socratic");
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("config override merges new declarative fields", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          custom: {
+            interactionStyle: "autonomous",
+            mutationPolicy: "allow",
+            answerPolicy: "direct",
+            dynamicPrompt: "objective-aware",
+          },
+        },
+      },
+      {
+        postures: {
+          custom: {
+            answerPolicy: "hint-first",
+            statusLabel: "✨ refined",
+            dynamicPrompt: "verification-focused",
+          },
+        },
+      },
+    ]);
+    const posture = result.postures.get("custom")!;
+    // From first config, not overridden by second
+    expect(posture.interactionStyle).toBe("autonomous");
+    expect(posture.mutationPolicy).toBe("allow");
+    // Overridden by second config
+    expect(posture.answerPolicy).toBe("hint-first");
+    expect(posture.statusLabel).toBe("✨ refined");
+    expect(posture.dynamicPrompt).toBe("verification-focused");
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("invalid interactionStyle produces config error and clears existing value", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { interactionStyle: "autonomous" } } },
+      { postures: { test: { interactionStyle: "bogus" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.interactionStyle).toBeUndefined();
+    expect(result.configErrors).toContain(
+      'config[1].postures.test.interactionStyle: invalid value',
+    );
+  });
+
+  it("invalid mutationPolicy produces config error and clears existing value", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { mutationPolicy: "allow" } } },
+      { postures: { test: { mutationPolicy: "maybe" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.mutationPolicy).toBeUndefined();
+    expect(result.configErrors).toContain(
+      'config[1].postures.test.mutationPolicy: invalid value',
+    );
+  });
+
+  it("invalid answerPolicy produces config error and clears existing value", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { answerPolicy: "direct" } } },
+      { postures: { test: { answerPolicy: "maybe" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.answerPolicy).toBeUndefined();
+    expect(result.configErrors).toContain(
+      'config[1].postures.test.answerPolicy: invalid value',
+    );
+  });
+
+  it("invalid dynamicPrompt produces config error and clears existing value", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { dynamicPrompt: "socratic" } } },
+      { postures: { test: { dynamicPrompt: "bogus" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.dynamicPrompt).toBeUndefined();
+    expect(result.configErrors).toContain(
+      'config[1].postures.test.dynamicPrompt: invalid value',
+    );
+  });
+
+  it("statusLabel must be a string", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { statusLabel: 123 as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.statusLabel).toBeUndefined();
+    expect(result.configErrors).toContain(
+      'config[0].postures.test.statusLabel: must be a string',
+    );
+  });
+
+  it("new fields do not affect policy exclusion from config", () => {
+    const entry: Record<string, unknown> = {
+      description: "No policy via new fields",
+      interactionStyle: "custom",
+      mutationPolicy: "read-mostly",
+    };
+    entry.policy = { type: "custom" };
+    const result = buildPostureRegistry([{ postures: { test: entry } }]);
+    const posture = result.postures.get("test")!;
+    // Declarative fields are loaded
+    expect(posture.interactionStyle).toBe("custom");
+    expect(posture.mutationPolicy).toBe("read-mostly");
+    // policy is still excluded from config — static shim applied
+    expect(posture.policy?.type).toBe("static");
+    expect(result.configErrors).toEqual([]);
+  });
+
+  it("invalid interactionStyle without existing value also sets undefined", () => {
+    const result = buildPostureRegistry([
+      { postures: { test: { interactionStyle: "bogus" as any } } },
+    ]);
+    const posture = result.postures.get("test")!;
+    expect(posture.interactionStyle).toBeUndefined();
+    expect(result.configErrors).toContain(
+      'config[0].postures.test.interactionStyle: invalid value',
+    );
+  });
+
 });

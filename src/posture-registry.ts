@@ -9,6 +9,11 @@ import { join, resolve } from "node:path";
 export type ContextDecision = "inherit" | "suppress";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
+export type InteractionStyle = "autonomous" | "assistive" | "review" | "socratic" | "custom";
+export type MutationPolicy = "allow" | "guarded" | "read-mostly";
+export type AnswerPolicy = "direct" | "hint-first" | "explicit-request";
+export type DynamicPromptPreset = "none" | "objective-aware" | "verification-focused" | "socratic" | "review-focused";
+
 export type ContextPolicy = {
   global?: ContextDecision;
   project?: ContextDecision;
@@ -141,6 +146,11 @@ export type PostureDefinition = {
   contextPolicy?: ContextPolicy;
   activeTools?: string[];
   thinking?: ThinkingLevel;
+  interactionStyle?: InteractionStyle;
+  mutationPolicy?: MutationPolicy;
+  answerPolicy?: AnswerPolicy;
+  statusLabel?: string;
+  dynamicPrompt?: DynamicPromptPreset;
   /** Reserved for future policy hooks. */
   policy?: PosturePolicy;
 };
@@ -390,6 +400,22 @@ export function validateThinking(value: unknown): value is ThinkingLevel {
   return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(String(value));
 }
 
+export function validateInteractionStyle(value: unknown): value is InteractionStyle {
+  return ["autonomous", "assistive", "review", "socratic", "custom"].includes(String(value));
+}
+
+export function validateMutationPolicy(value: unknown): value is MutationPolicy {
+  return ["allow", "guarded", "read-mostly"].includes(String(value));
+}
+
+export function validateAnswerPolicy(value: unknown): value is AnswerPolicy {
+  return ["direct", "hint-first", "explicit-request"].includes(String(value));
+}
+
+export function validateDynamicPromptPreset(value: unknown): value is DynamicPromptPreset {
+  return ["none", "objective-aware", "verification-focused", "socratic", "review-focused"].includes(String(value));
+}
+
 export function normalizeContextPolicy(
   value: unknown,
   source: string,
@@ -542,6 +568,61 @@ export function buildPostureRegistry(
             }
           }
 
+          // --- interactionStyle ---
+          let interactionStyle = existing?.interactionStyle;
+          if (entry.interactionStyle !== undefined) {
+            if (validateInteractionStyle(entry.interactionStyle)) {
+              interactionStyle = entry.interactionStyle;
+            } else {
+              interactionStyle = undefined;
+              addErr(`${source}.postures.${rawId}.interactionStyle: invalid value`);
+            }
+          }
+
+          // --- mutationPolicy ---
+          let mutationPolicy = existing?.mutationPolicy;
+          if (entry.mutationPolicy !== undefined) {
+            if (validateMutationPolicy(entry.mutationPolicy)) {
+              mutationPolicy = entry.mutationPolicy;
+            } else {
+              mutationPolicy = undefined;
+              addErr(`${source}.postures.${rawId}.mutationPolicy: invalid value`);
+            }
+          }
+
+          // --- answerPolicy ---
+          let answerPolicy = existing?.answerPolicy;
+          if (entry.answerPolicy !== undefined) {
+            if (validateAnswerPolicy(entry.answerPolicy)) {
+              answerPolicy = entry.answerPolicy;
+            } else {
+              answerPolicy = undefined;
+              addErr(`${source}.postures.${rawId}.answerPolicy: invalid value`);
+            }
+          }
+
+          // --- statusLabel ---
+          let statusLabel = existing?.statusLabel;
+          if (entry.statusLabel !== undefined) {
+            if (typeof entry.statusLabel === "string") {
+              statusLabel = entry.statusLabel;
+            } else {
+              statusLabel = undefined;
+              addErr(`${source}.postures.${rawId}.statusLabel: must be a string`);
+            }
+          }
+
+          // --- dynamicPrompt ---
+          let dynamicPrompt = existing?.dynamicPrompt;
+          if (entry.dynamicPrompt !== undefined) {
+            if (validateDynamicPromptPreset(entry.dynamicPrompt)) {
+              dynamicPrompt = entry.dynamicPrompt;
+            } else {
+              dynamicPrompt = undefined;
+              addErr(`${source}.postures.${rawId}.dynamicPrompt: invalid value`);
+            }
+          }
+
           // Preserve internal/custom policy from the existing definition
           // (e.g., agent's built-in custom policy) when config override does
           // not provide an explicit policy object.
@@ -553,6 +634,11 @@ export function buildPostureRegistry(
             contextPolicy,
             activeTools,
             thinking,
+            interactionStyle,
+            mutationPolicy,
+            answerPolicy,
+            statusLabel,
+            dynamicPrompt,
           };
           if (
             existing?.policy &&

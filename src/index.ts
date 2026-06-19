@@ -324,6 +324,11 @@ function inspectText(): string {
     `Prompt overlay: ${posture.promptOverlay ? "yes" : "no"}`,
     `Active tools override: ${posture.activeTools ? posture.activeTools.join(", ") : "none"}`,
     `Thinking override: ${posture.thinking ?? "none"}`,
+    `Interaction style: ${posture.interactionStyle ?? "none"}`,
+    `Mutation policy: ${posture.mutationPolicy ?? "none"}`,
+    `Answer policy: ${posture.answerPolicy ?? "none"}`,
+    `Status label: ${posture.statusLabel ?? "none"}`,
+    `Dynamic prompt: ${posture.dynamicPrompt ?? "none"}`,
     `Aliases: ${aliases.length > 0 ? aliases.join(", ") : "none"}`,
   ];
   if (runtimeState.contextFilterReport) {
