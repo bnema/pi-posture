@@ -1060,6 +1060,51 @@ describe("policy hook dispatch", () => {
     expect(policy.onInput).not.toHaveBeenCalled();
   });
 
+  // ---- input transform ----
+
+  it("input hook can transform text for active custom posture", async () => {
+    const policy = createCustomPolicy();
+    policy.onInput.mockReturnValue({ action: "transform", text: "transformed message" });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    const results = await harness.emit("input", {
+      type: "input",
+      text: "original message",
+      source: "interactive",
+    });
+
+    expect(policy.onInput).toHaveBeenCalledTimes(1);
+    expect(policy.onInput).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+      expect.objectContaining({ text: "original message" }),
+    );
+    const transformResult = results.find(
+      (r: any) => r && r.action === "transform",
+    );
+    expect(transformResult).toBeDefined();
+    expect(transformResult!.text).toBe("transformed message");
+  });
+
+  it("input hook transform falls back to original text when result.text is missing", async () => {
+    const policy = createCustomPolicy();
+    policy.onInput.mockReturnValue({ action: "transform" });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("guided", policy);
+    const results = await harness.emit("input", {
+      type: "input",
+      text: "original message",
+      source: "interactive",
+    });
+
+    const transformResult = results.find(
+      (r: any) => r && r.action === "transform",
+    );
+    expect(transformResult).toBeDefined();
+    expect(transformResult!.text).toBe("original message");
+  });
+
   // ---- tool_call ----
 
   it("tool_call hook can block tool execution for active custom posture", async () => {
@@ -1276,6 +1321,59 @@ describe("policy hook dispatch", () => {
     await harness.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
 
     expect(policy.onSessionShutdown).not.toHaveBeenCalled();
+  });
+
+  // ---- onSessionStart ----
+
+  it("onSessionStart hook is called for active custom posture via callPolicyHook", () => {
+    const policy = createCustomPolicy();
+    installAndActivate("guided", policy);
+
+    __testing.callPolicyHook(policy.onSessionStart);
+
+    expect(policy.onSessionStart).toHaveBeenCalledTimes(1);
+    expect(policy.onSessionStart).toHaveBeenCalledWith(
+      expect.objectContaining({ postureId: "guided" }),
+    );
+  });
+
+  it("onSessionStart hook receives restored runtime state via callPolicyHook", () => {
+    const policy = createCustomPolicy();
+
+    installAndActivate("tracked", policy);
+    // Populate runtime state simulating restorePostureRuntimeState
+    const state = __testing.getOrCreatePostureRuntimeState("tracked");
+    state.activationCount = 42;
+    state.lastActivatedAt = 99999;
+
+    __testing.callPolicyHook(policy.onSessionStart);
+
+    expect(policy.onSessionStart).toHaveBeenCalledTimes(1);
+    expect(policy.onSessionStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        postureId: "tracked",
+        runtimeState: expect.objectContaining({
+          activationCount: 42,
+          lastActivatedAt: 99999,
+        }),
+      }),
+    );
+  });
+
+  it("onSessionStart hook is not called for default/static posture via callPolicyHook", () => {
+    const policy = createCustomPolicy();
+
+    __testing.setPostureDefinition("other", {
+      id: "other",
+      label: "Other",
+      description: "Other",
+      policy,
+    });
+    __testing.runtimeState.activePostureId = "default";
+
+    const result = __testing.callPolicyHook(policy.onSessionStart);
+    expect(result).toBeUndefined();
+    expect(policy.onSessionStart).not.toHaveBeenCalled();
   });
 
   // ---- callPolicyHook helper ----

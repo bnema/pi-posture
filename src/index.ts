@@ -727,6 +727,7 @@ export default function piPosture(pi: ExtensionAPI) {
       event.reason,
       hasSessionPosture,
     );
+    callPolicyHook(activePosture().policy?.onSessionStart);
     const reg = getRegistryState();
     if (reg.configErrors.length > 0 && ctx.hasUI) {
       ctx.ui.notify(
@@ -779,6 +780,9 @@ export default function piPosture(pi: ExtensionAPI) {
     }
     if (result.action === "continue") {
       return { action: "continue" as const };
+    }
+    if (result.action === "transform") {
+      return { action: "transform" as const, text: result.text ?? event.text };
     }
     return;
   });

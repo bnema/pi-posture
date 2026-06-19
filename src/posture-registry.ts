@@ -42,7 +42,7 @@ export type PolicyInputInput = {
 
 /** Result from input hook. */
 export type PolicyInputResult = {
-  action?: "continue" | "handled";
+  action?: "continue" | "handled" | "transform";
   text?: string;
 };
 
