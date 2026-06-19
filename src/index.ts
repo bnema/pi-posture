@@ -113,11 +113,19 @@ function snapshotPostureRuntimeStates(): string {
   return JSON.stringify(sorted);
 }
 
+function isValidTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isFinite(new Date(value).getTime())
+  );
+}
+
 function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null {
   if (!isRecord(value)) return null;
   const { activationCount, lastActivatedAt, turnsInSession, objective } = value as Record<string, unknown>;
   if (typeof activationCount !== "number" || !Number.isFinite(activationCount)) return null;
-  if (lastActivatedAt !== undefined && (typeof lastActivatedAt !== "number" || !Number.isFinite(lastActivatedAt))) return null;
+  if (lastActivatedAt !== undefined && !isValidTimestamp(lastActivatedAt)) return null;
   if (turnsInSession !== undefined) {
     if (
       typeof turnsInSession !== "number" ||
@@ -175,7 +183,8 @@ function postureSummary(posture = activePosture()): string {
 }
 
 function formatTimestamp(value: number | undefined): string {
-  return value === undefined ? "—" : new Date(value).toISOString();
+  if (value === undefined || !isValidTimestamp(value)) return "—";
+  return new Date(value).toISOString();
 }
 
 function stateText(activeId = runtimeState.activePostureId): string {
@@ -897,7 +906,8 @@ export default function piPosture(pi: ExtensionAPI) {
       }
       if (arg === "objective" || arg.startsWith("objective ")) {
         const rest = trimmed.slice("objective".length).trim();
-        if (!rest || rest === "show") {
+        const restCommand = normalizeId(rest);
+        if (!rest || restCommand === "show") {
           pi.sendMessage({
             customType: MESSAGE_TYPE,
             content: objectiveText(),
@@ -905,7 +915,7 @@ export default function piPosture(pi: ExtensionAPI) {
           });
           return;
         }
-        if (rest === "clear" || rest === "--clear") {
+        if (restCommand === "clear" || restCommand === "--clear") {
           clearPostureObjective(pi);
           pi.sendMessage({
             customType: MESSAGE_TYPE,

@@ -755,6 +755,7 @@ describe("pi-posture internals", () => {
     expect(__testing.sanitizePostureRuntimeState(42)).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: "three" })).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: 3, lastActivatedAt: "yesterday" })).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: 3, lastActivatedAt: 1e100 })).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: NaN })).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: Infinity })).toBeNull();
   });
@@ -3132,6 +3133,11 @@ describe("command output compatibility", () => {
     await harness.run("objective");
     expect(harness.messages.at(-1)).toContain("Objective: Fix Parser BUG");
 
+    await harness.run("objective CLEAR");
+    expect(harness.messages.at(-1)).toBe("Objective cleared for posture: agent");
+    expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBeUndefined();
+
+    await harness.run("objective Another Goal");
     await harness.run("objective clear");
     expect(harness.messages.at(-1)).toBe("Objective cleared for posture: agent");
     expect(__testing.getOrCreatePostureRuntimeState("agent").objective).toBeUndefined();
