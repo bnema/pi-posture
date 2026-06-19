@@ -50,6 +50,7 @@ type RuntimeState = {
 // ============================================================
 
 const STATUS_KEY = "pi-posture";
+const WIDGET_KEY = "pi-posture-widget";
 const MESSAGE_TYPE = "pi-posture";
 
 // ============================================================
@@ -135,12 +136,36 @@ function postureSummary(posture = activePosture()): string {
   return [`posture: ${posture.id}`, ...suppressed].join(" · ");
 }
 
-function setStatus(ctx: ExtensionContext) {
+function updatePostureUi(ctx: ExtensionContext): void {
   const posture = activePosture();
-  ctx.ui.setStatus(
-    STATUS_KEY,
-    posture.id === "default" ? undefined : postureSummary(posture),
-  );
+  const policyCtx = activePolicyContext();
+  const policy = posture.policy;
+
+  // --- Status ---
+  let statusText: string | undefined;
+
+  if (policy?.type === "custom" && policy.renderStatus) {
+    const customStatus = policy.renderStatus(policyCtx);
+    if (customStatus !== undefined) {
+      statusText = customStatus;
+    }
+  }
+
+  if (statusText === undefined) {
+    statusText =
+      posture.id === "default" ? undefined : postureSummary(posture);
+  }
+
+  ctx.ui.setStatus(STATUS_KEY, statusText);
+
+  // --- Widget ---
+  let widgetContent: string[] | undefined;
+
+  if (policy?.type === "custom" && policy.renderWidget) {
+    widgetContent = policy.renderWidget(policyCtx);
+  }
+
+  ctx.ui.setWidget(WIDGET_KEY, widgetContent);
 }
 
 function sameStringSet(
@@ -204,7 +229,7 @@ function applyRuntime(
   if (posture.id === "default") {
     runtimeState.contextFilterReport = undefined;
     restoreToolsAndThinking(pi);
-    setStatus(ctx);
+    updatePostureUi(ctx);
     return;
   }
 
@@ -240,7 +265,7 @@ function applyRuntime(
     runtimeState.appliedThinkingOverride = undefined;
   }
 
-  setStatus(ctx);
+  updatePostureUi(ctx);
 }
 
 function inspectText(): string {
@@ -580,6 +605,7 @@ export const __testing = {
 
   // Runtime functions
   activePosture,
+  updatePostureUi,
   applyRuntime,
   addPromptOverlay,
   filterProjectContext,
@@ -711,7 +737,7 @@ export default function piPosture(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    setStatus(ctx);
+    updatePostureUi(ctx);
     const posture = activePosture();
     const policy = posture.policy;
 

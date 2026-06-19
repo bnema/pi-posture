@@ -108,6 +108,10 @@ export type PosturePolicy = {
   onSessionStart?: (ctx: PolicyHookContext) => void;
   /** Invoked on session shutdown. */
   onSessionShutdown?: (ctx: PolicyHookContext) => void;
+  /** Return status text for the footer, or undefined for default fallback. */
+  renderStatus?: (ctx: PolicyHookContext) => string | undefined;
+  /** Return widget lines above the editor, or undefined for no widget. */
+  renderWidget?: (ctx: PolicyHookContext) => string[] | undefined;
 };
 
 /** Declarative posture definition. Each posture is a named configuration
