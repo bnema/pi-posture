@@ -2018,6 +2018,31 @@ describe("agent built-in policy", () => {
       expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
     );
   });
+
+  it("agent policy does not intercept tool_call or tool_result events", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "agent";
+
+    const toolCallResults = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+    });
+
+    expect(toolCallResults.every((r) => r === undefined)).toBe(true);
+
+    const toolResultResults = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+      content: [{ type: "text", text: "hi" }],
+      isError: false,
+    });
+
+    expect(toolResultResults.every((r) => r === undefined)).toBe(true);
+  });
 });
 
 // ============================================================
@@ -2167,6 +2192,31 @@ describe("assist built-in policy", () => {
       expect.objectContaining({ postureId: "assist" }),
       expect.objectContaining({ prompt: "test", systemPrompt: "base" }),
     );
+  });
+
+  it("assist policy does not intercept tool_call or tool_result events", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "assist";
+
+    const toolCallResults = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+    });
+
+    expect(toolCallResults.every((r) => r === undefined)).toBe(true);
+
+    const toolResultResults = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+      content: [{ type: "text", text: "hi" }],
+      isError: false,
+    });
+
+    expect(toolResultResults.every((r) => r === undefined)).toBe(true);
   });
 });
 
@@ -2398,6 +2448,31 @@ describe("review built-in policy", () => {
     expect(
       __testing.getOrCreatePostureRuntimeState("review").turnsInSession,
     ).toBe(1);
+  });
+
+  it("review policy does not intercept tool_call or tool_result events", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "review";
+
+    const toolCallResults = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+    });
+
+    expect(toolCallResults.every((r) => r === undefined)).toBe(true);
+
+    const toolResultResults = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+      content: [{ type: "text", text: "hi" }],
+      isError: false,
+    });
+
+    expect(toolResultResults.every((r) => r === undefined)).toBe(true);
   });
 });
 
@@ -2632,6 +2707,153 @@ describe("learn built-in policy", () => {
     expect(
       __testing.getOrCreatePostureRuntimeState("learn").turnsInSession,
     ).toBe(1);
+  });
+
+  it("learn policy does not intercept tool_call or tool_result events", async () => {
+    const harness = fakeExtension("/tmp");
+    __testing.runtimeState.activePostureId = "learn";
+
+    const toolCallResults = await harness.emit("tool_call", {
+      type: "tool_call",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+    });
+
+    expect(toolCallResults.every((r) => r === undefined)).toBe(true);
+
+    const toolResultResults = await harness.emit("tool_result", {
+      type: "tool_result",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "echo hi" },
+      content: [{ type: "text", text: "hi" }],
+      isError: false,
+    });
+
+    expect(toolResultResults.every((r) => r === undefined)).toBe(true);
+  });
+});
+
+// ============================================================
+// Command output compatibility tests (Phase 3 Task 13)
+// ============================================================
+
+describe("command output compatibility", () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = tempProject();
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
+    __testing.postureRuntimeStates.clear();
+  });
+
+  afterEach(() => {
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("/posture list outputs all built-in postures", async () => {
+    const harness = fakeExtension(cwd);
+    await harness.run("list");
+    const output = harness.messages.join("");
+
+    expect(output).toContain("default");
+    expect(output).toContain("agent");
+    expect(output).toContain("assist");
+    expect(output).toContain("learn");
+    expect(output).toContain("review");
+    expect(output).toContain("Plugin-off behavior");
+    expect(output).toContain("Autonomous implementation");
+    expect(output).toContain("Human-led pair-programming");
+    expect(output).toContain("Tutor posture for learning");
+    expect(output).toContain("Critique-oriented posture");
+  });
+
+  it("/posture status reports correct posture id for each built-in", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("agent");
+    expect(harness.messages.at(-1)).toContain("Switched to posture: agent");
+
+    await harness.run("status");
+    expect(harness.messages.at(-1)).toBe("posture: agent");
+
+    await harness.run("learn");
+    await harness.run("status");
+    expect(harness.messages.at(-1)).toBe("posture: learn");
+
+    await harness.run("assist");
+    await harness.run("status");
+    expect(harness.messages.at(-1)).toBe("posture: assist");
+
+    await harness.run("review");
+    await harness.run("status");
+    expect(harness.messages.at(-1)).toBe("posture: review");
+
+    await harness.run("default");
+    await harness.run("status");
+    expect(harness.messages.at(-1)).toBe("posture: default");
+  });
+
+  it("/posture inspect shows correct fields for each built-in", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("default");
+    await harness.run("inspect");
+    let output = harness.messages.at(-1)!;
+    expect(output).toContain("Active posture: default (Default)");
+    expect(output).toContain("Prompt overlay: no");
+    expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+
+    await harness.run("agent");
+    await harness.run("inspect");
+    output = harness.messages.at(-1)!;
+    expect(output).toContain("Active posture: agent (Agent)");
+    expect(output).toContain("Prompt overlay: yes");
+    expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+
+    await harness.run("assist");
+    await harness.run("inspect");
+    output = harness.messages.at(-1)!;
+    expect(output).toContain("Active posture: assist (Assist)");
+    expect(output).toContain("Prompt overlay: yes");
+    expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+
+    await harness.run("review");
+    await harness.run("inspect");
+    output = harness.messages.at(-1)!;
+    expect(output).toContain("Active posture: review (Review)");
+    expect(output).toContain("Prompt overlay: yes");
+    expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+
+    await harness.run("learn");
+    await harness.run("inspect");
+    output = harness.messages.at(-1)!;
+    expect(output).toContain("Active posture: learn (Learn)");
+    expect(output).toContain("Prompt overlay: yes");
+    expect(output).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+  });
+
+  it("switching via alias works and emits correct status output", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("vanilla");
+    expect(harness.messages.at(-1)).toBe("Switched to posture: default");
+
+    await harness.run("teacher");
+    expect(harness.messages.at(-1)).toBe("Switched to posture: learn");
+
+    await harness.run("pair");
+    expect(harness.messages.at(-1)).toBe("Switched to posture: assist");
+
+    await harness.run("autonomous");
+    expect(harness.messages.at(-1)).toBe("Switched to posture: agent");
   });
 });
 
