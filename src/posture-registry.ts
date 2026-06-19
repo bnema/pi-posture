@@ -574,7 +574,6 @@ export function buildPostureRegistry(
             if (validateInteractionStyle(entry.interactionStyle)) {
               interactionStyle = entry.interactionStyle;
             } else {
-              interactionStyle = undefined;
               addErr(`${source}.postures.${rawId}.interactionStyle: invalid value`);
             }
           }
@@ -585,7 +584,6 @@ export function buildPostureRegistry(
             if (validateMutationPolicy(entry.mutationPolicy)) {
               mutationPolicy = entry.mutationPolicy;
             } else {
-              mutationPolicy = undefined;
               addErr(`${source}.postures.${rawId}.mutationPolicy: invalid value`);
             }
           }
@@ -596,7 +594,6 @@ export function buildPostureRegistry(
             if (validateAnswerPolicy(entry.answerPolicy)) {
               answerPolicy = entry.answerPolicy;
             } else {
-              answerPolicy = undefined;
               addErr(`${source}.postures.${rawId}.answerPolicy: invalid value`);
             }
           }
@@ -607,7 +604,6 @@ export function buildPostureRegistry(
             if (typeof entry.statusLabel === "string") {
               statusLabel = entry.statusLabel;
             } else {
-              statusLabel = undefined;
               addErr(`${source}.postures.${rawId}.statusLabel: must be a string`);
             }
           }
@@ -618,7 +614,6 @@ export function buildPostureRegistry(
             if (validateDynamicPromptPreset(entry.dynamicPrompt)) {
               dynamicPrompt = entry.dynamicPrompt;
             } else {
-              dynamicPrompt = undefined;
               addErr(`${source}.postures.${rawId}.dynamicPrompt: invalid value`);
             }
           }

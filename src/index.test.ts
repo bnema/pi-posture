@@ -3343,49 +3343,49 @@ describe("buildPostureRegistry (pure)", () => {
     expect(result.configErrors).toEqual([]);
   });
 
-  it("invalid interactionStyle produces config error and clears existing value", () => {
+  it("invalid interactionStyle produces config error and preserves existing value", () => {
     const result = buildPostureRegistry([
       { postures: { test: { interactionStyle: "autonomous" } } },
       { postures: { test: { interactionStyle: "bogus" as any } } },
     ]);
     const posture = result.postures.get("test")!;
-    expect(posture.interactionStyle).toBeUndefined();
+    expect(posture.interactionStyle).toBe("autonomous");
     expect(result.configErrors).toContain(
       'config[1].postures.test.interactionStyle: invalid value',
     );
   });
 
-  it("invalid mutationPolicy produces config error and clears existing value", () => {
+  it("invalid mutationPolicy produces config error and preserves existing value", () => {
     const result = buildPostureRegistry([
       { postures: { test: { mutationPolicy: "allow" } } },
       { postures: { test: { mutationPolicy: "maybe" as any } } },
     ]);
     const posture = result.postures.get("test")!;
-    expect(posture.mutationPolicy).toBeUndefined();
+    expect(posture.mutationPolicy).toBe("allow");
     expect(result.configErrors).toContain(
       'config[1].postures.test.mutationPolicy: invalid value',
     );
   });
 
-  it("invalid answerPolicy produces config error and clears existing value", () => {
+  it("invalid answerPolicy produces config error and preserves existing value", () => {
     const result = buildPostureRegistry([
       { postures: { test: { answerPolicy: "direct" } } },
       { postures: { test: { answerPolicy: "maybe" as any } } },
     ]);
     const posture = result.postures.get("test")!;
-    expect(posture.answerPolicy).toBeUndefined();
+    expect(posture.answerPolicy).toBe("direct");
     expect(result.configErrors).toContain(
       'config[1].postures.test.answerPolicy: invalid value',
     );
   });
 
-  it("invalid dynamicPrompt produces config error and clears existing value", () => {
+  it("invalid dynamicPrompt produces config error and preserves existing value", () => {
     const result = buildPostureRegistry([
       { postures: { test: { dynamicPrompt: "socratic" } } },
       { postures: { test: { dynamicPrompt: "bogus" as any } } },
     ]);
     const posture = result.postures.get("test")!;
-    expect(posture.dynamicPrompt).toBeUndefined();
+    expect(posture.dynamicPrompt).toBe("socratic");
     expect(result.configErrors).toContain(
       'config[1].postures.test.dynamicPrompt: invalid value',
     );
@@ -3427,6 +3427,56 @@ describe("buildPostureRegistry (pure)", () => {
     expect(posture.interactionStyle).toBeUndefined();
     expect(result.configErrors).toContain(
       'config[0].postures.test.interactionStyle: invalid value',
+    );
+  });
+
+  it("invalid enum values in later config preserve first-config values and report errors", () => {
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          custom: {
+            interactionStyle: "assistive",
+            mutationPolicy: "guarded",
+            answerPolicy: "hint-first",
+            dynamicPrompt: "socratic",
+            statusLabel: "✨ initial",
+          },
+        },
+      },
+      {
+        postures: {
+          custom: {
+            interactionStyle: "bogus" as any,
+            mutationPolicy: "maybe" as any,
+            answerPolicy: "nope" as any,
+            dynamicPrompt: "wrong" as any,
+            statusLabel: 456 as any,
+          },
+        },
+      },
+    ]);
+    const posture = result.postures.get("custom")!;
+    // All values preserved from first config
+    expect(posture.interactionStyle).toBe("assistive");
+    expect(posture.mutationPolicy).toBe("guarded");
+    expect(posture.answerPolicy).toBe("hint-first");
+    expect(posture.dynamicPrompt).toBe("socratic");
+    expect(posture.statusLabel).toBe("✨ initial");
+    // All errors reported
+    expect(result.configErrors).toContain(
+      'config[1].postures.custom.interactionStyle: invalid value',
+    );
+    expect(result.configErrors).toContain(
+      'config[1].postures.custom.mutationPolicy: invalid value',
+    );
+    expect(result.configErrors).toContain(
+      'config[1].postures.custom.answerPolicy: invalid value',
+    );
+    expect(result.configErrors).toContain(
+      'config[1].postures.custom.dynamicPrompt: invalid value',
+    );
+    expect(result.configErrors).toContain(
+      'config[1].postures.custom.statusLabel: must be a string',
     );
   });
 
