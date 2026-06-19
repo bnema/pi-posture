@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import piPosture, { __testing } from "./index.js";
+import { BUILTIN_POSTURES } from "./posture-registry.js";
 
 function tempProject() {
   const cwd = mkdtempSync(join(tmpdir(), "pi-posture-"));
@@ -532,5 +533,52 @@ describe("pi-posture internals", () => {
     __testing.runtimeState.activePostureId = "default";
     const defaultPrompt = __testing.addPromptOverlay("base", __testing.activePosture());
     expect(defaultPrompt).toBe("base");
+  });
+
+  // ============================================================
+  // Foundation coverage (Phase 1 Task 4)
+  // ============================================================
+
+  it("preserves built-in prompt overlay when project config only overrides description and thinking", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        learn: { description: "Custom learn", thinking: "low" },
+      },
+    });
+    __testing.loadPostures(cwd);
+    const learn = __testing.getRegistryState().postures.get("learn")!;
+    expect(learn.description).toBe("Custom learn");
+    expect(learn.thinking).toBe("low");
+    const builtIn = BUILTIN_POSTURES.find((p) => p.id === "learn")!;
+    expect(learn.promptOverlay).toBe(builtIn.promptOverlay);
+  });
+
+  it("inspect output lists aliases for active posture", () => {
+    writeProjectConfig(cwd, {
+      aliases: { socratic: "learn" },
+    });
+    __testing.loadPostures(cwd);
+    __testing.runtimeState.activePostureId = "learn";
+    expect(__testing.inspectText()).toContain("Aliases: socratic");
+  });
+
+  it("inspect output does not expose policy internals for policy-backed postures", () => {
+    __testing.resetRegistry();
+    __testing.runtimeState.activePostureId = "agent";
+    const text = __testing.inspectText();
+    // Standard fields still present
+    expect(text).toContain("Active posture: agent (Agent)");
+    expect(text).toContain("Context policy: global=inherit, project=inherit");
+    // Policy internals not leaked
+    expect(text).not.toMatch(/onActivate|onDeactivate|onBeforeActivate/);
+  });
+
+  it("built-in prompt overlays remain byte-for-byte unchanged through registry", () => {
+    __testing.resetRegistry();
+    for (const builtIn of BUILTIN_POSTURES) {
+      if (!builtIn.promptOverlay) continue;
+      const stored = __testing.getRegistryState().postures.get(builtIn.id)!;
+      expect(stored.promptOverlay).toBe(builtIn.promptOverlay);
+    }
   });
 });
