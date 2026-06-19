@@ -442,6 +442,10 @@ export function validateDynamicPromptPreset(value: unknown): value is DynamicPro
   );
 }
 
+/**
+ * Stateful context-policy normalizer for direct registry APIs. Validation
+ * errors are recorded in the module-level config error list.
+ */
 export function normalizeContextPolicy(
   value: unknown,
   source: string,

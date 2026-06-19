@@ -563,7 +563,7 @@ function switchPosture(
 }
 
 function shouldLoadProjectConfig(ctx: ExtensionContext): boolean {
-  return (ctx as ExtensionContext & { isProjectTrusted?: () => boolean }).isProjectTrusted?.() ?? true;
+  return (ctx as ExtensionContext & { isProjectTrusted?: () => boolean }).isProjectTrusted?.() ?? false;
 }
 
 function reloadAndReconcile(pi: ExtensionAPI, ctx: ExtensionContext) {

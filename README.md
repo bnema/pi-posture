@@ -111,7 +111,7 @@ Built-in postures keep the full toolset available. Learning mode is cognitive gu
 
 ## Project config trust note
 
-Project-local config is loaded only when Pi marks the project trusted through `ctx.isProjectTrusted()` when that API is available. Older Pi extension contexts without that method keep the existing behavior and load project config.
+Project-local config is loaded only when Pi marks the project trusted through `ctx.isProjectTrusted()`. Extension contexts without that trust API skip project config by default.
 
 ## Install
 

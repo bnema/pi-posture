@@ -20,7 +20,7 @@ function projectContext(path: string, content: string) {
   return `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
 }
 
-function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: string; branch?: any[]; projectTrusted?: boolean } = {}) {
+function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: string; branch?: any[]; projectTrusted?: boolean; noProjectTrustApi?: boolean } = {}) {
   let commandHandler: ((args: string, ctx: any) => Promise<void>) | undefined;
   const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<void> | void>>();
   const messages: string[] = [];
@@ -59,7 +59,7 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
       this.thinking = level;
     },
   };
-  const ctx = {
+  const ctx: Record<string, unknown> = {
     cwd,
     hasUI: options.hasUI ?? false,
     ui: {
@@ -74,8 +74,10 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
       },
     },
     sessionManager: { getBranch: () => options.branch ?? [] },
-    isProjectTrusted: () => options.projectTrusted ?? true,
   };
+  if (!options.noProjectTrustApi) {
+    ctx.isProjectTrusted = () => options.projectTrusted ?? true;
+  }
 
   piPosture(pi as any);
   if (!commandHandler) throw new Error("/posture command was not registered");
@@ -904,6 +906,20 @@ describe("pi-posture internals", () => {
       },
     });
     const harness = fakeExtension(cwd, { projectTrusted: false });
+
+    await harness.run("custom");
+
+    expect(harness.messages.at(-1)).toBe("Unknown posture: custom. Try /posture list.");
+    expect(__testing.getRegistryState().postures.has("custom")).toBe(false);
+  });
+
+  it("runtime command reload skips project config when trust API is unavailable", async () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        custom: { description: "No trust API project posture" },
+      },
+    });
+    const harness = fakeExtension(cwd, { noProjectTrustApi: true });
 
     await harness.run("custom");
 
