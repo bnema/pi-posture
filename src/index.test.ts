@@ -94,12 +94,12 @@ describe("pi-posture internals", () => {
   beforeEach(() => {
     cwd = tempProject();
     __testing.resetRegistry();
-    __testing.state.activePostureId = "default";
-    __testing.state.toolSnapshot = undefined;
-    __testing.state.appliedToolsOverride = undefined;
-    __testing.state.thinkingSnapshot = undefined;
-    __testing.state.appliedThinkingOverride = undefined;
-    __testing.state.contextFilterReport = undefined;
+    __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.toolSnapshot = undefined;
+    __testing.runtimeState.appliedToolsOverride = undefined;
+    __testing.runtimeState.thinkingSnapshot = undefined;
+    __testing.runtimeState.appliedThinkingOverride = undefined;
+    __testing.runtimeState.contextFilterReport = undefined;
   });
 
   afterEach(() => {
@@ -124,17 +124,17 @@ describe("pi-posture internals", () => {
     __testing.loadPostures(cwd);
 
     expect(__testing.resolvePostureId("socratic")).toBe("learn");
-    __testing.state.activePostureId = "learn";
+    __testing.runtimeState.activePostureId = "learn";
     expect(__testing.inspectText()).toContain("Project learn");
     expect(__testing.inspectText()).toContain("project config.postures.broken.thinking: invalid thinking level");
   });
 
   it("adds prompt overlays for non-default postures but not default", () => {
-    __testing.state.activePostureId = "learn";
+    __testing.runtimeState.activePostureId = "learn";
     const learnPrompt = __testing.addPromptOverlay("base", __testing.activePosture());
     expect(learnPrompt).toContain('<pi_posture id="learn">');
 
-    __testing.state.activePostureId = "default";
+    __testing.runtimeState.activePostureId = "default";
     const defaultPrompt = __testing.addPromptOverlay("base", __testing.activePosture());
     expect(defaultPrompt).toBe("base");
   });
@@ -147,7 +147,7 @@ describe("pi-posture internals", () => {
 
     expect(filtered).not.toContain("global");
     expect(filtered).toContain("project");
-    expect(__testing.state.contextFilterReport?.suppressed).toEqual([globalPath]);
+    expect(__testing.runtimeState.contextFilterReport?.suppressed).toEqual([globalPath]);
 
     const noContext = __testing.filterProjectContext("NO_CONTEXT", { global: "suppress", project: "suppress" });
     expect(noContext).toBe("NO_CONTEXT");
@@ -180,7 +180,7 @@ describe("pi-posture internals", () => {
     expect(filtered).not.toContain(projectContext(globalPath, "global"));
     expect(filtered).toContain(projectContext(projectPath, "project"));
     expect(filtered).toContain('<pi_posture id="quiet">');
-    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
+    expect(__testing.runtimeState.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
   });
 
   it("falls back to rendered context filtering when structured metadata contains paths missing from the prompt", () => {
@@ -210,7 +210,7 @@ describe("pi-posture internals", () => {
 
     expect(filtered).not.toContain(projectContext(globalPath, "global"));
     expect(filtered).toContain(projectContext(projectPath, "project"));
-    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
+    expect(__testing.runtimeState.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
   });
 
   it("falls back to rendered context filtering when the prompt contains context missing from structured metadata", () => {
@@ -235,7 +235,7 @@ describe("pi-posture internals", () => {
 
     expect(filtered).not.toContain(projectContext(globalPath, "global"));
     expect(filtered).toContain(projectContext(projectPath, "project"));
-    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
+    expect(__testing.runtimeState.contextFilterReport).toEqual({ kept: [projectPath], suppressed: [globalPath] });
   });
 
   it("falls back to rendered context filtering when duplicate rendered paths diverge from metadata", () => {
@@ -266,7 +266,7 @@ describe("pi-posture internals", () => {
     expect(filtered).not.toContain(projectContext(globalPath, "global"));
     expect(filtered).toContain(projectContext(projectPath, "project-one"));
     expect(filtered).toContain(projectContext(projectPath, "project-two"));
-    expect(__testing.state.contextFilterReport).toEqual({ kept: [projectPath, projectPath], suppressed: [globalPath] });
+    expect(__testing.runtimeState.contextFilterReport).toEqual({ kept: [projectPath, projectPath], suppressed: [globalPath] });
   });
 
   it("passes systemPromptOptions contextFiles through before_agent_start", async () => {
@@ -300,7 +300,7 @@ describe("pi-posture internals", () => {
     const result = results.find((entry): entry is { systemPrompt: string } => Boolean(entry && "systemPrompt" in entry));
     expect(result?.systemPrompt).not.toContain("<project_context>");
     expect(result?.systemPrompt).toContain('<pi_posture id="quiet">');
-    expect(__testing.state.contextFilterReport?.suppressed).toEqual([secondProjectPath, firstProjectPath]);
+    expect(__testing.runtimeState.contextFilterReport?.suppressed).toEqual([secondProjectPath, firstProjectPath]);
   });
 
   it("restores tool and thinking overrides only when current values still match plugin-applied overrides", () => {
@@ -371,9 +371,10 @@ describe("pi-posture internals", () => {
 
     __testing.loadPostures(cwd);
 
-    expect(__testing.state.startupPicker.enabled).toBe(true);
-    expect(__testing.state.startupPicker.reasons).toEqual(["startup", "new"]);
-    expect(__testing.state.startupPicker.timeoutMs).toBe(2500);
+    const registry = __testing.getRegistryState();
+    expect(registry.startupPicker.enabled).toBe(true);
+    expect(registry.startupPicker.reasons).toEqual(["startup", "new"]);
+    expect(registry.startupPicker.timeoutMs).toBe(2500);
     expect(__testing.selectableStartupPostures().map((posture) => posture.id)).toEqual(["learn", "assist"]);
   });
 
@@ -439,7 +440,7 @@ describe("pi-posture internals", () => {
         options: { timeout: 1234 },
       },
     ]);
-    expect(__testing.state.activePostureId).toBe("learn");
+    expect(__testing.runtimeState.activePostureId).toBe("learn");
     expect(harness.appended).toContainEqual({ customType: "posture", data: expect.objectContaining({ id: "learn" }) });
     expect(harness.messages.at(-1)).toBe("Switched to posture: learn");
   });
@@ -449,13 +450,13 @@ describe("pi-posture internals", () => {
 
     const cancelHarness = fakeExtension(cwd, { hasUI: true });
     await cancelHarness.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(__testing.state.activePostureId).toBe("default");
+    expect(__testing.runtimeState.activePostureId).toBe("default");
     expect(cancelHarness.appended).toEqual([]);
     expect(cancelHarness.messages).toEqual([]);
 
     const unknownHarness = fakeExtension(cwd, { hasUI: true, selectChoice: "missing" });
     await unknownHarness.emit("session_start", { type: "session_start", reason: "startup" });
-    expect(__testing.state.activePostureId).toBe("default");
+    expect(__testing.runtimeState.activePostureId).toBe("default");
     expect(unknownHarness.appended).toEqual([]);
     expect(unknownHarness.messages).toEqual([]);
   });
@@ -467,7 +468,7 @@ describe("pi-posture internals", () => {
 
     await harness.emit("session_start", { type: "session_start", reason: "startup" });
 
-    expect(__testing.state.activePostureId).toBe("review");
+    expect(__testing.runtimeState.activePostureId).toBe("review");
     expect(harness.selectCalls).toHaveLength(0);
     expect(harness.appended).toEqual([]);
     expect(harness.messages).toEqual([]);
@@ -481,7 +482,7 @@ describe("pi-posture internals", () => {
     await harness.emit("session_start", { type: "session_start", reason: "startup" });
 
     expect(harness.selectCalls).toHaveLength(1);
-    expect(__testing.state.activePostureId).toBe("learn");
+    expect(__testing.runtimeState.activePostureId).toBe("learn");
     expect(harness.appended).toContainEqual({ customType: "posture", data: expect.objectContaining({ id: "learn" }) });
   });
 });
