@@ -395,7 +395,7 @@ const internalState: InternalState = {
 };
 
 // ============================================================
-// Pure Helpers
+// Helper Functions
 // ============================================================
 
 export function normalizeId(value: string): string {

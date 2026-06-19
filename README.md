@@ -51,7 +51,7 @@ Project-local config is loaded from the `.pi` directory (matches Pi's standard p
 | `label` | `string` | Display label for the posture. |
 | `description` | `string` | Short description shown in lists and the startup picker. |
 | `promptOverlay` | `string` | Injected into the system prompt inside `<pi_posture>` tags when the posture is active. |
-| `contextPolicy` | `object` | Filter project context files. Values: `{ global: "inherit"|"suppress", project: "inherit"|"suppress" }`. |
+| `contextPolicy` | `object` | Filter project context files. Values: `{ global: "inherit" \| "suppress", project: "inherit" \| "suppress" }`. |
 | `activeTools` | `string[]` | Override the set of active tool names. Unknown tools are silently dropped. |
 | `thinking` | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh"` | Override the thinking level. |
 | `interactionStyle` | `"autonomous" \| "assistive" \| "review" \| "socratic" \| "custom"` | Declarative hint about the intended interaction mode. Not a runtime hook. |

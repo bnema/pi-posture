@@ -755,6 +755,8 @@ describe("pi-posture internals", () => {
     expect(__testing.sanitizePostureRuntimeState([])).toBeNull();
     expect(__testing.sanitizePostureRuntimeState(42)).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: "three" })).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: -1 })).toBeNull();
+    expect(__testing.sanitizePostureRuntimeState({ activationCount: 1.5 })).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: 3, lastActivatedAt: "yesterday" })).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: 3, lastActivatedAt: 1e100 })).toBeNull();
     expect(__testing.sanitizePostureRuntimeState({ activationCount: NaN })).toBeNull();
@@ -990,8 +992,8 @@ describe("policy hook dispatch", () => {
   }
 
   /** Register a custom posture with a policy in the registry and activate it.
-   *  Must be called after creating a fakeExtension harness since resetRegistry()
-   *  wipes custom entries. */
+   *  Must be called after beforeEach resetRegistry() runs, otherwise custom
+   *  entries are wiped. */
   function installAndActivate(id: string, policy: ReturnType<typeof createCustomPolicy>) {
     __testing.setPostureDefinition(id, {
       id,

@@ -79,7 +79,13 @@ export function isValidTimestamp(value: unknown): value is number {
 export function sanitizePostureRuntimeState(value: unknown): PostureRuntimeState | null {
   if (!isRecord(value)) return null;
   const { activationCount, lastActivatedAt, turnsInSession, objective } = value as Record<string, unknown>;
-  if (typeof activationCount !== "number" || !Number.isFinite(activationCount)) return null;
+  if (
+    typeof activationCount !== "number" ||
+    !Number.isFinite(activationCount) ||
+    activationCount < 0 ||
+    !Number.isInteger(activationCount)
+  )
+    return null;
   if (lastActivatedAt !== undefined && !isValidTimestamp(lastActivatedAt)) return null;
   if (turnsInSession !== undefined) {
     if (
