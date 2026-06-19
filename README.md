@@ -39,7 +39,7 @@ All built-in postures (except `default`) may add **bounded dynamic guidance** be
 
 Define custom postures in `postures.json` — one of:
 
-- `~/.$AGENT_DIR/postures.json` (global)
+- `~/.pi/agent/postures.json` (global)
 - `.pi/postures.json` (project-local, overrides global)
 
 Project-local config is loaded from the `.pi` directory (matches Pi's standard project config directory). Config errors never break Pi startup; run `/posture inspect` to see any issues.
@@ -57,7 +57,7 @@ Project-local config is loaded from the `.pi` directory (matches Pi's standard p
 | `interactionStyle` | `"autonomous" \| "assistive" \| "review" \| "socratic" \| "custom"` | Declarative hint about the intended interaction mode. Not a runtime hook. |
 | `mutationPolicy` | `"allow" \| "guarded" \| "read-mostly"` | Declarative hint about mutation permissions. Not a runtime hook. |
 | `answerPolicy` | `"direct" \| "hint-first" \| "explicit-request"` | Declarative hint about answer style. Not a runtime hook. |
-| `statusLabel` | `string` | Label shown in the Pi status bar when this posture is active (replaces the default status text). |
+| `statusLabel` | `string` | Declarative label shown in `/posture inspect`; reserved for future status policy use. |
 | `dynamicPrompt` | `"none" \| "objective-aware" \| "verification-focused" \| "socratic" \| "review-focused"` | Declarative hint for future dynamic prompt behavior. Not a runtime hook. |
 
 > **Important**: The `policy` field with executable hook functions is reserved for built-in and programmatic use. JSON config files **cannot** define `policy` entries.
@@ -107,11 +107,11 @@ Accepts `true` / `false` to quickly enable or disable with defaults, or a full o
 
 ## Context policy
 
-Built-in postures keep the full toolset available. Learning mode is cognitive guidance, not a permissions mode. When `contextPolicy` is set, global context paths (from `$AGENT_DIR` or `~/.agents`) and project context files can be selectively suppressed.
+Built-in postures keep the full toolset available. Learning mode is cognitive guidance, not a permissions mode. When `contextPolicy` is set, global context paths (from `~/.pi/agent` or `~/.agents`) and project context files can be selectively suppressed.
 
-## Context policy effect on API version
+## Project config trust note
 
-Project trust gating (`loadProjectConfig`) is prepared in the registry but not yet wired to `ctx.isProjectTrusted()` due to the current package API version. This is reserved for a future dependency update.
+The registry supports skipping project config via `loadProjectConfig`, but the current installed Pi API does not expose `ctx.isProjectTrusted()` in this project dependency. Trust wiring is reserved for a future dependency update.
 
 ## Install
 
