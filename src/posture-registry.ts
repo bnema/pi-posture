@@ -65,8 +65,24 @@ export type PolicyToolResultInput = {
 };
 
 /** Result from tool_result hook. */
+// Local definitions matching Pi's TextContent and ImageContent types
+// (not re-exported from @earendil-works/pi-coding-agent)
+export interface PolicyTextContent {
+  readonly type: "text";
+  readonly text: string;
+  readonly textSignature?: string;
+}
+
+export interface PolicyImageContent {
+  readonly type: "image";
+  readonly data: string;
+  readonly mimeType: string;
+}
+
+export type PolicyToolResultContent = Array<PolicyTextContent | PolicyImageContent>;
+
 export type PolicyToolResultResult = {
-  content?: unknown;
+  content?: PolicyToolResultContent;
   isError?: boolean;
 };
 

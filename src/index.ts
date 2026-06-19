@@ -162,10 +162,13 @@ function postureSummary(posture = activePosture()): string {
   return [`posture: ${posture.id}`, ...suppressed].join(" · ");
 }
 
-function updatePostureUi(ctx: ExtensionContext): void {
+function updatePostureUi(pi: ExtensionAPI, ctx: ExtensionContext): void {
   const posture = activePosture();
   const policyCtx = activePolicyContext();
   const policy = posture.policy;
+
+  // Snapshot before UI hooks (each may mutate runtimeState)
+  const before = snapshotPostureRuntimeStates();
 
   // --- Status ---
   let statusText: string | undefined;
@@ -192,6 +195,9 @@ function updatePostureUi(ctx: ExtensionContext): void {
   }
 
   ctx.ui.setWidget(WIDGET_KEY, widgetContent);
+
+  // Persist once if any UI hook mutated runtime state
+  persistIfChanged(pi, before);
 }
 
 function sameStringSet(
@@ -255,7 +261,7 @@ function applyRuntime(
   if (posture.id === "default") {
     runtimeState.contextFilterReport = undefined;
     restoreToolsAndThinking(pi);
-    updatePostureUi(ctx);
+    updatePostureUi(pi, ctx);
     return;
   }
 
@@ -291,7 +297,7 @@ function applyRuntime(
     runtimeState.appliedThinkingOverride = undefined;
   }
 
-  updatePostureUi(ctx);
+  updatePostureUi(pi, ctx);
 }
 
 function inspectText(): string {
@@ -786,7 +792,7 @@ export default function piPosture(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    updatePostureUi(ctx);
+    updatePostureUi(pi, ctx);
     const posture = activePosture();
     const policy = posture.policy;
 
@@ -873,7 +879,7 @@ export default function piPosture(pi: ExtensionAPI) {
     if (!result) return;
     // Patch content/isError into the result, preserving original content if not patched
     return {
-      content: result.content !== undefined ? (result.content as any) : undefined,
+      content: result.content !== undefined ? result.content : undefined,
       isError: result.isError,
     };
   });

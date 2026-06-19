@@ -828,13 +828,18 @@ describe("policy hook dispatch", () => {
 
   // ---- UI hooks ----
 
+  function mockPi() {
+    return { appendEntry: vi.fn() } as any;
+  }
+
   it("custom active policy can override status text via renderStatus", () => {
     const policy = createCustomPolicy();
     policy.renderStatus = vi.fn().mockReturnValue("custom status");
     installAndActivate("guided", policy);
 
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     expect(policy.renderStatus).toHaveBeenCalledTimes(1);
     expect(policy.renderStatus).toHaveBeenCalledWith(
@@ -848,8 +853,9 @@ describe("policy hook dispatch", () => {
     policy.renderStatus = vi.fn().mockReturnValue(undefined);
     installAndActivate("guided", policy);
 
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     expect(policy.renderStatus).toHaveBeenCalledTimes(1);
     // Fallback for non-default posture: "posture: guided"
@@ -861,8 +867,9 @@ describe("policy hook dispatch", () => {
     policy.renderWidget = vi.fn().mockReturnValue(["Line 1", "Line 2"]);
     installAndActivate("guided", policy);
 
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     expect(policy.renderWidget).toHaveBeenCalledTimes(1);
     expect(policy.renderWidget).toHaveBeenCalledWith(
@@ -874,8 +881,9 @@ describe("policy hook dispatch", () => {
   it("widget clears when switching to default posture", () => {
     __testing.runtimeState.activePostureId = "default";
 
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     // Default posture clears widget
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("pi-posture-widget", undefined);
@@ -886,16 +894,18 @@ describe("policy hook dispatch", () => {
     // No renderWidget on policy
     installAndActivate("guided", policy);
 
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("pi-posture-widget", undefined);
   });
 
   it("static/default postures keep existing status and no-widget behavior", () => {
     __testing.runtimeState.activePostureId = "default";
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     // Default: clears status
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("pi-posture", undefined);
@@ -903,7 +913,7 @@ describe("policy hook dispatch", () => {
 
     // Non-default static posture (e.g. agent)
     __testing.runtimeState.activePostureId = "agent";
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
     expect(ctx.ui.setStatus).toHaveBeenCalledWith("pi-posture", "posture: agent");
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("pi-posture-widget", undefined);
   });
@@ -920,8 +930,9 @@ describe("policy hook dispatch", () => {
     });
     __testing.runtimeState.activePostureId = "default";
 
+    const pi = mockPi();
     const ctx = { ui: { setStatus: vi.fn(), setWidget: vi.fn() } } as any;
-    __testing.updatePostureUi(ctx);
+    __testing.updatePostureUi(pi, ctx);
 
     expect(policy.renderStatus).not.toHaveBeenCalled();
     expect(policy.renderWidget).not.toHaveBeenCalled();
@@ -1692,6 +1703,57 @@ describe("policy hook dispatch", () => {
     harness.appended.length = 0;
 
     await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, timestamp: 100 });
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(0);
+  });
+
+  it("renderStatus mutation persists exactly one pi-posture-state entry", () => {
+    const policy = createCustomPolicy();
+    policy.renderStatus = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return "status";
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    __testing.updatePostureUi(harness.pi as any, harness.ctx as any);
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    expect((stateEntries[0].data as any).states.tracked.activationCount).toBe(1);
+  });
+
+  it("renderWidget mutation persists exactly one pi-posture-state entry", () => {
+    const policy = createCustomPolicy();
+    policy.renderWidget = vi.fn((ctx) => {
+      ctx.runtimeState.activationCount += 1;
+      return ["widget"];
+    });
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    __testing.updatePostureUi(harness.pi as any, harness.ctx as any);
+
+    const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
+    expect(stateEntries).toHaveLength(1);
+    expect((stateEntries[0].data as any).states.tracked.activationCount).toBe(1);
+  });
+
+  it("no-op renderStatus and renderWidget do not append pi-posture-state entry", () => {
+    const policy = createCustomPolicy();
+    policy.renderStatus = vi.fn().mockReturnValue(undefined);
+    policy.renderWidget = vi.fn().mockReturnValue(undefined);
+
+    const harness = fakeExtension("/tmp");
+    installAndActivate("tracked", policy);
+    harness.appended.length = 0;
+
+    __testing.updatePostureUi(harness.pi as any, harness.ctx as any);
 
     const stateEntries = harness.appended.filter(e => e.customType === "pi-posture-state");
     expect(stateEntries).toHaveLength(0);
