@@ -413,19 +413,31 @@ export function validateThinking(value: unknown): value is ThinkingLevel {
 }
 
 export function validateInteractionStyle(value: unknown): value is InteractionStyle {
-  return ["autonomous", "assistive", "review", "socratic", "custom"].includes(String(value));
+  return (
+    typeof value === "string" &&
+    ["autonomous", "assistive", "review", "socratic", "custom"].includes(value)
+  );
 }
 
 export function validateMutationPolicy(value: unknown): value is MutationPolicy {
-  return ["allow", "guarded", "read-mostly"].includes(String(value));
+  return (
+    typeof value === "string" &&
+    ["allow", "guarded", "read-mostly"].includes(value)
+  );
 }
 
 export function validateAnswerPolicy(value: unknown): value is AnswerPolicy {
-  return ["direct", "hint-first", "explicit-request"].includes(String(value));
+  return (
+    typeof value === "string" &&
+    ["direct", "hint-first", "explicit-request"].includes(value)
+  );
 }
 
 export function validateDynamicPromptPreset(value: unknown): value is DynamicPromptPreset {
-  return ["none", "objective-aware", "verification-focused", "socratic", "review-focused"].includes(String(value));
+  return (
+    typeof value === "string" &&
+    ["none", "objective-aware", "verification-focused", "socratic", "review-focused"].includes(value)
+  );
 }
 
 export function normalizeContextPolicy(

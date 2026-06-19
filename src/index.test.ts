@@ -3543,6 +3543,39 @@ describe("buildPostureRegistry (pure)", () => {
     );
   });
 
+  it("non-string enum config values are invalid and preserve existing values", () => {
+    const invalidEntry: Record<string, unknown> = {
+      interactionStyle: ["assistive"],
+      mutationPolicy: { value: "guarded" },
+      answerPolicy: ["hint-first"],
+      dynamicPrompt: { value: "socratic" },
+    };
+    const result = buildPostureRegistry([
+      {
+        postures: {
+          custom: {
+            interactionStyle: "assistive",
+            mutationPolicy: "guarded",
+            answerPolicy: "hint-first",
+            dynamicPrompt: "socratic",
+          },
+        },
+      },
+      { postures: { custom: invalidEntry } },
+    ]);
+    const posture = result.postures.get("custom")!;
+    expect(posture.interactionStyle).toBe("assistive");
+    expect(posture.mutationPolicy).toBe("guarded");
+    expect(posture.answerPolicy).toBe("hint-first");
+    expect(posture.dynamicPrompt).toBe("socratic");
+    expect(result.configErrors).toEqual([
+      "config[1].postures.custom.interactionStyle: invalid value",
+      "config[1].postures.custom.mutationPolicy: invalid value",
+      "config[1].postures.custom.answerPolicy: invalid value",
+      "config[1].postures.custom.dynamicPrompt: invalid value",
+    ]);
+  });
+
   it("unknown extra fields in config posture entry do not crash or leak into posture definition", () => {
     const entry: Record<string, unknown> = {
       description: "Posture with extra fields",
