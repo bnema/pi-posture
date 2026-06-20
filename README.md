@@ -99,14 +99,30 @@ Project-local config is loaded from the `.pi` directory (matches Pi's standard p
 
 ## Startup picker
 
-Shown at session start when:
+The startup posture picker is enabled by default. It is shown at session start when:
 
-- `startupPicker.enabled` is `true`
+- `startupPicker.enabled` is `true` (the default)
 - The session has a UI (`ctx.hasUI`)
 - The session-start reason is in `startupPicker.reasons`
 - The picker has a reason to ask: either `onlyWhenUnset` is `false`, or no posture was restored from the current session branch yet
 
-Accepts `true` / `false` to quickly enable or disable with defaults, or a full object.
+Accepts `true` / `false` to quickly enable or disable with defaults, or a full object. By default, `onlyWhenUnset` is `true`, so the picker appears only when no posture was restored from the current session branch; set it to `false` to ask again even when a session posture already exists. By default, `include` contains all built-in postures and `timeoutMs` is unset, so the picker has no extension-provided timeout. Configured `reasons` may include `startup`, `new`, `resume`, and `fork`; `reload` never opens the picker. `include` entries may use posture IDs or aliases; duplicates and unknown entries are reported by `/posture inspect`.
+
+To opt out, add:
+
+```json
+{
+  "startupPicker": false
+}
+```
+
+or:
+
+```json
+{
+  "startupPicker": { "enabled": false }
+}
+```
 
 ## Context policy
 

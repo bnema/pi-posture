@@ -440,8 +440,7 @@ describe("pi-posture internals", () => {
     expect(__testing.inspectText()).toContain("project config.startupPicker.reasons[2]: must be a string");
   });
 
-  it("does not run startup picker without UI or when session already has a posture", () => {
-    writeProjectConfig(cwd, { startupPicker: true });
+  it("runs the startup picker by default but not without UI, on reload, or when already set", () => {
     __testing.loadPostures(cwd);
 
     const noUi = { hasUI: false };
@@ -451,6 +450,24 @@ describe("pi-posture internals", () => {
     expect(__testing.startupPickerShouldRun("startup", withUi as any, true)).toBe(false);
     expect(__testing.startupPickerShouldRun("reload", withUi as any, false)).toBe(false);
     expect(__testing.startupPickerShouldRun("startup", withUi as any, false)).toBe(true);
+  });
+
+  it("startup picker can be disabled by config", async () => {
+    writeProjectConfig(cwd, { startupPicker: false });
+    __testing.loadPostures(cwd);
+    expect(__testing.getRegistryState().startupPicker.enabled).toBe(false);
+    expect(__testing.startupPickerShouldRun("startup", { hasUI: true } as any, false)).toBe(false);
+
+    const disabledHarness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance." });
+    await disabledHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(disabledHarness.selectCalls).toEqual([]);
+    expect(__testing.runtimeState.activePostureId).toBe("default");
+
+    writeProjectConfig(cwd, { startupPicker: { enabled: false } });
+    const objectDisabledHarness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance." });
+    await objectDisabledHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(objectDisabledHarness.selectCalls).toEqual([]);
+    expect(__testing.runtimeState.activePostureId).toBe("default");
   });
 
   it("session_start never opens the picker on reload or non-UI sessions", async () => {
@@ -466,8 +483,7 @@ describe("pi-posture internals", () => {
     expect(noUiHarness.appended).toEqual([]);
   });
 
-  it("startup picker applies and persists the selected posture", async () => {
-    writeProjectConfig(cwd, { startupPicker: { enabled: true, include: ["default", "learn"], timeoutMs: 1234 } });
+  it("startup picker applies and persists the selected posture by default", async () => {
     const harness = fakeExtension(cwd, { hasUI: true, selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance." });
 
     await harness.emit("session_start", { type: "session_start", reason: "startup" });
@@ -477,9 +493,12 @@ describe("pi-posture internals", () => {
         title: "Choose posture for this session",
         choices: [
           "default — Plugin-off behavior. Pi runs normally with no posture overlay.",
+          "orchestrator — Primary coordination posture for approved plans: delegates to sub-agents and works autonomously until the goal is complete.",
+          "assist — Human-led pair-programming posture. The user keeps implementation ownership.",
           "learn — Tutor posture for learning while still using the full toolset for accurate guidance.",
+          "review — Critique-oriented posture for inspecting work and explaining risks before edits.",
         ],
-        options: { timeout: 1234 },
+        options: { timeout: undefined },
       },
     ]);
     expect(__testing.runtimeState.activePostureId).toBe("learn");
@@ -3410,6 +3429,14 @@ describe("buildPostureRegistry (pure)", () => {
     );
   });
 
+  it("enables startup picker by default", () => {
+    const result = buildPostureRegistry([]);
+    expect(result.startupPicker.enabled).toBe(true);
+    expect(result.startupPicker.onlyWhenUnset).toBe(true);
+    expect(result.startupPicker.reasons).toEqual(["startup", "new", "resume", "fork"]);
+    expect(result.configErrors).toEqual([]);
+  });
+
   it("applies startup picker config", () => {
     const result = buildPostureRegistry([
       {
@@ -3425,6 +3452,11 @@ describe("buildPostureRegistry (pure)", () => {
     expect(result.startupPicker.reasons).toEqual(["startup", "new"]);
     expect(result.startupPicker.timeoutMs).toBe(2500);
     expect(result.configErrors).toEqual([]);
+  });
+
+  it("allows startup picker to be disabled with boolean or object config", () => {
+    expect(buildPostureRegistry([{ startupPicker: false }]).startupPicker.enabled).toBe(false);
+    expect(buildPostureRegistry([{ startupPicker: { enabled: false } }]).startupPicker.enabled).toBe(false);
   });
 
   it("resolves aliases and deduplicates in startup picker include", () => {

@@ -321,7 +321,7 @@ export const BUILTIN_LEARN_POLICY: PosturePolicy = {
 };
 
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
-  enabled: false,
+  enabled: true,
   onlyWhenUnset: true,
   include: ["default", "orchestrator", "assist", "learn", "review"],
   reasons: ["startup", "new", "resume", "fork"],
