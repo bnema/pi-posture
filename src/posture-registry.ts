@@ -25,6 +25,7 @@ export type InteractionStyle = "autonomous" | "assistive" | "review" | "socratic
 export type MutationPolicy = "allow" | "guarded" | "read-mostly";
 export type AnswerPolicy = "direct" | "hint-first" | "explicit-request";
 export type DynamicPromptPreset = "none" | "objective-aware" | "verification-focused" | "socratic" | "review-focused";
+export type PromptMode = "overlay" | "replace";
 
 export type ContextPolicy = {
   global?: ContextDecision;
@@ -208,6 +209,7 @@ export type PostureConfig = {
   postures?: Record<string, PostureConfigEntry>;
   aliases?: Record<string, string>;
   startupPicker?: Partial<StartupPickerConfig> | boolean;
+  promptMode?: PromptMode;
 };
 
 // ============================================================
@@ -320,6 +322,12 @@ export const BUILTIN_LEARN_POLICY: PosturePolicy = {
   },
 };
 
+export const DEFAULT_PROMPT_MODE: PromptMode = "overlay";
+
+export function validatePromptMode(value: unknown): value is PromptMode {
+  return value === "overlay" || value === "replace";
+}
+
 export const DEFAULT_STARTUP_PICKER: StartupPickerConfig = {
   enabled: true,
   onlyWhenUnset: true,
@@ -395,6 +403,7 @@ type InternalState = {
   postures: Map<string, PostureDefinition>;
   aliases: Map<string, string>;
   startupPicker: StartupPickerConfig;
+  promptMode: PromptMode;
   configErrors: string[];
 };
 
@@ -406,6 +415,7 @@ const internalState: InternalState = {
     include: [...DEFAULT_STARTUP_PICKER.include],
     reasons: [...DEFAULT_STARTUP_PICKER.reasons],
   },
+  promptMode: DEFAULT_PROMPT_MODE,
   configErrors: [],
 };
 
@@ -509,6 +519,7 @@ export type RegistryBuildResult = {
   postures: Map<string, PostureDefinition>;
   aliases: Map<string, string>;
   startupPicker: StartupPickerConfig;
+  promptMode: PromptMode;
   configErrors: string[];
 };
 
@@ -533,6 +544,7 @@ export function buildPostureRegistry(
     include: [...DEFAULT_STARTUP_PICKER.include],
     reasons: [...DEFAULT_STARTUP_PICKER.reasons],
   };
+  let promptMode: PromptMode = DEFAULT_PROMPT_MODE;
   const configErrors: string[] = [];
   const addErr = (msg: string) => {
     if (!configErrors.includes(msg)) configErrors.push(msg);
@@ -542,6 +554,15 @@ export function buildPostureRegistry(
     const config = configs[i];
     if (!config) continue;
     const source = sources?.[i] ?? `config[${i}]`;
+
+    // --- Merge prompt mode ---
+    if (config.promptMode !== undefined) {
+      if (validatePromptMode(config.promptMode)) {
+        promptMode = config.promptMode;
+      } else {
+        addErr(`${source}.promptMode: expected overlay or replace`);
+      }
+    }
 
     // --- Merge postures ---
     if (config.postures !== undefined) {
@@ -799,7 +820,7 @@ export function buildPostureRegistry(
   }
   startupPicker.include = include;
 
-  return { postures, aliases, startupPicker, configErrors };
+  return { postures, aliases, startupPicker, promptMode, configErrors };
 }
 
 // ============================================================
@@ -821,6 +842,7 @@ export function resetRegistry(): void {
     include: [...DEFAULT_STARTUP_PICKER.include],
     reasons: [...DEFAULT_STARTUP_PICKER.reasons],
   };
+  internalState.promptMode = DEFAULT_PROMPT_MODE;
   internalState.configErrors = [];
 }
 
@@ -869,6 +891,7 @@ export function loadPostures(
   internalState.postures = result.postures;
   internalState.aliases = result.aliases;
   internalState.startupPicker = result.startupPicker;
+  internalState.promptMode = result.promptMode;
   internalState.configErrors = [
     ...globalConfig.errors,
     ...projectConfig.errors,

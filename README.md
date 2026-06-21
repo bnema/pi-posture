@@ -30,6 +30,7 @@ Each non-default built-in adds a static `<pi_posture>` prompt overlay and dynami
 /posture state       show active posture runtime state
 /posture clear-state reset runtime state for the active posture
 /posture objective   show, set, or clear the active posture objective
+/posture prompt-mode show or switch prompt mode: overlay or replace
 /posture <name>      switch by posture id or alias
 ```
 
@@ -49,6 +50,27 @@ Built-in aliases:
 | `autonomous`, `execute` | `orchestrator` |
 | `pair` | `assist` |
 | `teacher`, `tutor`, `study` | `learn` |
+
+## Prompt mode
+
+Prompt mode controls how posture guidance is applied:
+
+- `overlay` keeps Pi's normal system prompt and appends posture guidance. This is the default.
+- `replace` returns a posture-owned system prompt for each turn. Pi's runtime, tools, sessions, and safety behavior still remain built in; only the model-facing prompt is replaced.
+
+Switch live:
+
+```text
+/posture prompt-mode replace
+/posture prompt-mode overlay
+/posture prompt-mode status
+```
+
+Set the default in config:
+
+```json
+{ "promptMode": "replace" }
+```
 
 ## Custom postures
 
@@ -128,11 +150,12 @@ Set `onlyWhenUnset` to `false` to ask even when a posture was restored. `include
 
 ## Runtime behavior
 
-- Active posture and per-posture runtime state are persisted in the session branch.
+- Active posture, prompt mode, and per-posture runtime state are persisted in the session branch.
 - Switching postures can update active tools, thinking level, status text, and widget content.
 - Tool and thinking overrides are restored only if the user has not changed them since the posture applied them.
 - `contextPolicy` filters rendered project context. Global context means files under Pi's agent directories; project context means other project context files.
 - Project-local config loads only when Pi marks the project trusted. Extensions without the trust API skip project config by default.
+- When `/posture <name>` is used after conversation context exists, pi-posture creates a compacted replacement session and restores the selected posture there so prompt-mode changes apply at a clean session boundary.
 
 ## Develop
 

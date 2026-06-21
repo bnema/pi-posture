@@ -24,6 +24,7 @@ import {
   resetRegistry,
   resolvePostureId,
   selectableStartupPostures,
+  validatePromptMode,
   withStaticPosturePolicy,
 } from "./posture-registry.js";
 
@@ -36,6 +37,7 @@ import type {
   PolicyToolResultInput,
   PostureDefinition,
   PostureRuntimeState,
+  PromptMode,
   SessionStartReason,
 } from "./posture-registry.js";
 
@@ -46,6 +48,7 @@ import type {
 const STATUS_KEY = "pi-posture";
 const WIDGET_KEY = "pi-posture-widget";
 const MESSAGE_TYPE = "pi-posture";
+const PROMPT_MODE_ENTRY_TYPE = "pi-posture-prompt-mode";
 
 // ============================================================
 // Runtime Helper Functions
@@ -128,6 +131,10 @@ function objectiveText(): string {
   const objective = postureRuntimeStates.get(id)?.objective;
   if (!objective) return `posture: ${id}\n  (no objective set)`;
   return `posture: ${id}\n  Objective: ${objective}`;
+}
+
+function promptModeText(): string {
+  return `prompt mode: ${runtimeState.promptMode}`;
 }
 
 function setPostureObjective(pi: ExtensionAPI, text: string): void {
@@ -293,6 +300,7 @@ function inspectText(): string {
   const lines = [
     `Active posture: ${posture.id} (${posture.label})`,
     posture.description,
+    `Prompt mode: ${runtimeState.promptMode}`,
     `Context policy: ${contextSummary(posture.contextPolicy)}`,
     `Prompt overlay: ${posture.promptOverlay ? "yes" : "no"}`,
     `Active tools override: ${posture.activeTools ? posture.activeTools.join(", ") : "none"}`,
@@ -467,12 +475,117 @@ function addPromptOverlay(
   return `${filtered}\n\n<pi_posture id="${posture.id}">\n${posture.promptOverlay}\n</pi_posture>`;
 }
 
+function promptDate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatReplacementTools(options?: BuildSystemPromptOptions): string {
+  const selected = options?.selectedTools ?? [];
+  if (selected.length === 0) return "(none)";
+  return selected
+    .map((name) => {
+      const snippet = options?.toolSnippets?.[name];
+      return snippet ? `- ${name}: ${snippet}` : `- ${name}`;
+    })
+    .join("\n");
+}
+
+function formatReplacementContext(
+  posture: PostureDefinition,
+  options?: BuildSystemPromptOptions,
+  baseSystemPrompt?: string,
+): string | undefined {
+  const contextFiles = options?.contextFiles ?? [];
+  if (contextFiles.length > 0) {
+    const kept = contextFiles.filter(
+      (file) => !shouldSuppressContext(file.path, posture.contextPolicy ?? {}),
+    );
+    if (kept.length === 0) return undefined;
+    return [
+      "<project_context>",
+      "Project-specific instructions and guidelines:",
+      "",
+      ...kept.map(
+        (file) => `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
+      ),
+      "</project_context>",
+    ].join("\n");
+  }
+
+  if (!baseSystemPrompt) return undefined;
+  const filtered = filterProjectContext(baseSystemPrompt, posture.contextPolicy, options);
+  return filtered.match(PROJECT_CONTEXT_PATTERN)?.[0]?.trimEnd();
+}
+
+function buildReplacementPrompt(
+  posture: PostureDefinition,
+  options?: BuildSystemPromptOptions,
+  dynamicGuidance?: string,
+  baseSystemPrompt?: string,
+): string {
+  const lines = [
+    "You are operating inside Pi with pi-posture prompt mode set to replace.",
+    "Pi's runtime, tools, session handling, and safety model are still active; this prompt replaces only the model-facing system instructions for this turn.",
+    "",
+    `Active posture: ${posture.id} (${posture.label})`,
+    posture.description,
+    "",
+    "Available tools:",
+    formatReplacementTools(options),
+    "",
+    "Guidelines:",
+    "- Be concise in your responses",
+    "- Show file paths clearly when working with files",
+  ];
+
+  if (posture.promptOverlay) {
+    lines.push("", `<pi_posture id="${posture.id}">`, posture.promptOverlay, "</pi_posture>");
+  }
+  if (dynamicGuidance) {
+    lines.push("", dynamicGuidance);
+  }
+  const context = formatReplacementContext(posture, options, baseSystemPrompt);
+  if (context) {
+    lines.push("", context);
+  }
+  lines.push("", `Current date: ${promptDate()}`);
+  lines.push(`Current working directory: ${(options?.cwd ?? "").replace(/\\/g, "/")}`);
+  return lines.join("\n");
+}
+
 // ============================================================
 // Session & Posture Management
 // ============================================================
 
 function rememberPosture(pi: ExtensionAPI, id: string) {
   pi.appendEntry("posture", { id, timestamp: Date.now() });
+}
+
+function rememberPromptMode(pi: ExtensionAPI, mode = runtimeState.promptMode): void {
+  pi.appendEntry(PROMPT_MODE_ENTRY_TYPE, { mode });
+}
+
+function restorePromptModeFromSession(ctx: ExtensionContext): boolean {
+  const branch = ctx.sessionManager.getBranch();
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
+    if (entry.type !== "custom" || entry.customType !== PROMPT_MODE_ENTRY_TYPE) continue;
+    const data = entry.data as { mode?: unknown } | undefined;
+    if (validatePromptMode(data?.mode)) {
+      runtimeState.promptMode = data.mode;
+      return true;
+    }
+  }
+  return false;
+}
+
+function setPromptMode(pi: ExtensionAPI, mode: PromptMode): void {
+  runtimeState.promptMode = mode;
+  rememberPromptMode(pi, mode);
 }
 
 function restorePostureFromSession(ctx: ExtensionContext): boolean {
@@ -560,6 +673,140 @@ function switchPosture(
     content: `Switched to ${postureSummary(posture)}`,
     display: true,
   });
+}
+
+type CompactionResult = {
+  summary: string;
+  firstKeptEntryId: string;
+  tokensBefore: number;
+  details?: unknown;
+};
+
+type SessionSetupTarget = {
+  appendMessage(message: unknown): void;
+  appendCustomMessageEntry(customType: string, content: unknown, display: boolean, details?: unknown): void;
+  appendCustomEntry(customType: string, data?: unknown): void;
+};
+
+function hasConversationContext(ctx: ExtensionContext): boolean {
+  return ctx.sessionManager.getBranch().some((entry) =>
+    entry.type === "message" ||
+    entry.type === "custom_message" ||
+    entry.type === "compaction" ||
+    entry.type === "branch_summary"
+  );
+}
+
+function compactForPostureSwitch(ctx: ExtensionContext, postureId: string): Promise<CompactionResult> {
+  return new Promise((resolve, reject) => {
+    ctx.compact({
+      customInstructions: `Switching posture to ${postureId}. Summarize the current session so the replacement session can continue with the new posture. Preserve goals, decisions, files, blockers, and next steps.`,
+      onComplete: resolve,
+      onError: reject,
+    });
+  });
+}
+
+function appendRuntimeStateEntry(target: SessionSetupTarget): void {
+  const states: Record<string, PostureRuntimeState> = {};
+  for (const [id, state] of postureRuntimeStates) {
+    states[id] = { ...state };
+  }
+  target.appendCustomEntry("pi-posture-state", { states });
+}
+
+type CopyableSessionEntry = {
+  type: string;
+  id?: string;
+  message?: unknown;
+  customType?: string;
+  content?: unknown;
+  display?: boolean;
+  details?: unknown;
+};
+
+function keptEntriesAfterCompaction(branch: CopyableSessionEntry[], firstKeptEntryId: string): CopyableSessionEntry[] {
+  const firstKeptIndex = branch.findIndex((entry) => entry.id === firstKeptEntryId);
+  if (firstKeptIndex < 0) return [];
+  return branch.slice(firstKeptIndex).filter((entry) =>
+    entry.type === "message" || entry.type === "custom_message"
+  );
+}
+
+function copyKeptEntry(target: SessionSetupTarget, entry: CopyableSessionEntry): void {
+  if (entry.type === "message" && entry.message !== undefined) {
+    target.appendMessage(entry.message);
+    return;
+  }
+  if (entry.type === "custom_message" && entry.customType && entry.content !== undefined) {
+    target.appendCustomMessageEntry(entry.customType, entry.content, entry.display ?? true, entry.details);
+  }
+}
+
+function seedReplacementSession(
+  target: SessionSetupTarget,
+  compaction: CompactionResult,
+  branchBeforeCompaction: CopyableSessionEntry[],
+): void {
+  target.appendCustomMessageEntry(
+    "pi-posture-handoff-summary",
+    `Compacted summary from previous session:\n\n${compaction.summary}`,
+    true,
+    {
+      firstKeptEntryId: compaction.firstKeptEntryId,
+      tokensBefore: compaction.tokensBefore,
+      details: compaction.details,
+    },
+  );
+  for (const entry of keptEntriesAfterCompaction(branchBeforeCompaction, compaction.firstKeptEntryId)) {
+    copyKeptEntry(target, entry);
+  }
+  target.appendCustomEntry("posture", { id: runtimeState.activePostureId, timestamp: Date.now() });
+  target.appendCustomEntry(PROMPT_MODE_ENTRY_TYPE, { mode: runtimeState.promptMode });
+  appendRuntimeStateEntry(target);
+}
+
+async function switchPostureWithReplacementSession(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext & { newSession?: (options: any) => Promise<{ cancelled: boolean }> },
+  posture: PostureDefinition,
+): Promise<boolean> {
+  if (!ctx.newSession || !hasConversationContext(ctx)) return false;
+
+  const branchBeforeCompaction = ctx.sessionManager.getBranch() as CopyableSessionEntry[];
+  switchPosture(pi, ctx, posture);
+  rememberPromptMode(pi);
+
+  try {
+    const compaction = await compactForPostureSwitch(ctx, posture.id);
+    const parentSession = ctx.sessionManager.getSessionFile();
+    const result = await ctx.newSession({
+      parentSession,
+      setup: (sessionManager: SessionSetupTarget) => {
+        seedReplacementSession(sessionManager, compaction, branchBeforeCompaction);
+      },
+      withSession: async (replacementCtx: { reload?: () => Promise<void>; ui?: { notify?: (message: string, type?: string) => void } }) => {
+        replacementCtx.ui?.notify?.(`Switched to ${postureSummary(posture)} in a compacted replacement session.`, "info");
+        await replacementCtx.reload?.();
+      },
+    });
+
+    if (result.cancelled) {
+      pi.sendMessage({
+        customType: MESSAGE_TYPE,
+        content: "Posture replacement session cancelled; posture remains switched in the current session.",
+        display: true,
+      });
+    }
+    return true;
+  } catch (error) {
+    pi.sendMessage({
+      customType: MESSAGE_TYPE,
+      content: `Could not create compacted replacement session (${error instanceof Error ? error.message : String(error)}); posture remains switched in the current session.`,
+      display: true,
+    });
+    return true;
+  }
 }
 
 function shouldLoadProjectConfig(ctx: ExtensionContext): boolean {
@@ -732,6 +979,10 @@ export default function piPosture(pi: ExtensionAPI) {
         "status",
         "inspect",
         "state",
+        "prompt-mode",
+        "prompt-mode overlay",
+        "prompt-mode replace",
+        "prompt-mode status",
         "clear-state",
         "objective",
         ...reg.postures.keys(),
@@ -762,7 +1013,37 @@ export default function piPosture(pi: ExtensionAPI) {
           Array.from(reg.postures.values()),
         );
         if (!selected) return;
+        if (await switchPostureWithReplacementSession(pi, ctx, selected)) {
+          return;
+        }
         switchPosture(pi, ctx, selected);
+        return;
+      }
+
+      if (arg === "prompt-mode" || arg.startsWith("prompt-mode ")) {
+        const modeArg = normalizeId(trimmed.slice("prompt-mode".length));
+        if (!modeArg || modeArg === "status") {
+          pi.sendMessage({
+            customType: MESSAGE_TYPE,
+            content: promptModeText(),
+            display: true,
+          });
+          return;
+        }
+        if (!validatePromptMode(modeArg)) {
+          pi.sendMessage({
+            customType: MESSAGE_TYPE,
+            content: `Unknown prompt mode: ${modeArg}. Try overlay or replace.`,
+            display: true,
+          });
+          return;
+        }
+        setPromptMode(pi, modeArg);
+        pi.sendMessage({
+          customType: MESSAGE_TYPE,
+          content: `Switched to ${promptModeText()}`,
+          display: true,
+        });
         return;
       }
 
@@ -851,12 +1132,18 @@ export default function piPosture(pi: ExtensionAPI) {
       }
 
       const reg = getRegistryState();
-      switchPosture(pi, ctx, reg.postures.get(id)!);
+      const posture = reg.postures.get(id)!;
+      if (await switchPostureWithReplacementSession(pi, ctx, posture)) {
+        return;
+      }
+      switchPosture(pi, ctx, posture);
     },
   });
 
   pi.on("session_start", async (event, ctx) => {
     registryLoadPostures(ctx.cwd, { loadProjectConfig: shouldLoadProjectConfig(ctx) });
+    runtimeState.promptMode = getRegistryState().promptMode;
+    restorePromptModeFromSession(ctx);
     ensureActivePostureExists();
     const hasSessionPosture = restorePostureFromSession(ctx);
     restorePostureRuntimeState(ctx);
@@ -881,12 +1168,7 @@ export default function piPosture(pi: ExtensionAPI) {
     updatePostureUi(pi, ctx);
     const posture = activePosture();
     const policy = posture.policy;
-
-    // Start with existing overlay behavior
-    let systemPrompt = event.systemPrompt;
-    if (posture.id !== "default") {
-      systemPrompt = addPromptOverlay(systemPrompt, posture, event.systemPromptOptions);
-    }
+    let dynamicGuidance: string | undefined;
 
     // Chain policy hook result if present
     if (policy?.type === "custom" && policy.onBeforeAgentStart) {
@@ -901,8 +1183,19 @@ export default function piPosture(pi: ExtensionAPI) {
         hookInput,
       );
       persistIfChanged(pi, before);
-      if (hookResult?.systemPrompt) {
-        systemPrompt = `${systemPrompt}\n${hookResult.systemPrompt}`;
+      dynamicGuidance = hookResult?.systemPrompt;
+    }
+
+    let systemPrompt = event.systemPrompt;
+    if (runtimeState.promptMode === "replace") {
+      systemPrompt = buildReplacementPrompt(posture, event.systemPromptOptions, dynamicGuidance, event.systemPrompt);
+    } else {
+      // Existing overlay behavior
+      if (posture.id !== "default") {
+        systemPrompt = addPromptOverlay(systemPrompt, posture, event.systemPromptOptions);
+      }
+      if (dynamicGuidance) {
+        systemPrompt = `${systemPrompt}\n${dynamicGuidance}`;
       }
     }
 

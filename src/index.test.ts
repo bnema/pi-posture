@@ -20,7 +20,15 @@ function projectContext(path: string, content: string) {
   return `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
 }
 
-function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: string; branch?: any[]; projectTrusted?: boolean; noProjectTrustApi?: boolean } = {}) {
+function fakeExtension(cwd: string, options: {
+  hasUI?: boolean;
+  selectChoice?: string;
+  branch?: any[];
+  projectTrusted?: boolean;
+  noProjectTrustApi?: boolean;
+  compactResult?: { summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown };
+  compactError?: Error;
+} = {}) {
   let commandHandler: ((args: string, ctx: any) => Promise<void>) | undefined;
   const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<void> | void>>();
   const messages: string[] = [];
@@ -28,6 +36,10 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
   const selectCalls: Array<{ title: string; choices: string[]; options?: unknown }> = [];
   const statusCalls: Array<{ key: string; content: string | undefined }> = [];
   const widgetCalls: Array<{ key: string; content: string[] | undefined }> = [];
+  const compactCalls: Array<{ customInstructions?: string }> = [];
+  const newSessionCalls: any[] = [];
+  const replacementEntries: Array<{ type: string; [key: string]: unknown }> = [];
+  const replacementReloadCalls: string[] = [];
   const pi = {
     registerMessageRenderer() {},
     registerCommand(_name: string, options: { handler: (args: string, ctx: any) => Promise<void> }) {
@@ -76,7 +88,44 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
         return options.selectChoice;
       },
     },
-    sessionManager: { getBranch: () => options.branch ?? [] },
+    sessionManager: {
+      getBranch: () => options.branch ?? [],
+      getSessionFile: () => "/tmp/current-session.jsonl",
+    },
+    compact: ({ customInstructions, onComplete, onError }: any) => {
+      compactCalls.push({ customInstructions });
+      queueMicrotask(() => {
+        if (options.compactError) onError?.(options.compactError);
+        else onComplete?.(options.compactResult ?? {
+          summary: "compacted summary",
+          firstKeptEntryId: "kept-entry",
+          tokensBefore: 123,
+          details: { readFiles: [], modifiedFiles: [] },
+        });
+      });
+    },
+    newSession: async (newSessionOptions: any) => {
+      newSessionCalls.push(newSessionOptions);
+      const replacementSessionManager = {
+        appendMessage(message: unknown) {
+          replacementEntries.push({ type: "message", message });
+        },
+        appendCustomMessageEntry(customType: string, content: unknown, display: boolean, details?: unknown) {
+          replacementEntries.push({ type: "custom_message", customType, content, display, details });
+        },
+        appendCustomEntry(customType: string, data?: unknown) {
+          replacementEntries.push({ type: "custom", customType, data });
+        },
+      };
+      await newSessionOptions.setup?.(replacementSessionManager);
+      await newSessionOptions.withSession?.({
+        reload: async () => {
+          replacementReloadCalls.push("reload");
+        },
+        ui: { notify() {}, setStatus() {}, setWidget() {} },
+      });
+      return { cancelled: false };
+    },
   };
   if (!options.noProjectTrustApi) {
     ctx.isProjectTrusted = () => options.projectTrusted ?? true;
@@ -92,6 +141,10 @@ function fakeExtension(cwd: string, options: { hasUI?: boolean; selectChoice?: s
     selectCalls,
     statusCalls,
     widgetCalls,
+    compactCalls,
+    newSessionCalls,
+    replacementEntries,
+    replacementReloadCalls,
     run: (args: string) => commandHandler!(args, ctx),
     emit: async (event: string, payload: any): Promise<any[]> => {
       const results: any[] = [];
@@ -108,6 +161,7 @@ describe("pi-posture internals", () => {
     cwd = tempProject();
     __testing.resetRegistry();
     __testing.runtimeState.activePostureId = "default";
+    __testing.runtimeState.promptMode = "overlay";
     __testing.runtimeState.toolSnapshot = undefined;
     __testing.runtimeState.appliedToolsOverride = undefined;
     __testing.runtimeState.thinkingSnapshot = undefined;
@@ -504,6 +558,150 @@ describe("pi-posture internals", () => {
     expect(__testing.runtimeState.activePostureId).toBe("learn");
     expect(harness.appended).toContainEqual({ customType: "posture", data: expect.objectContaining({ id: "learn" }) });
     expect(harness.messages.at(-1)).toBe("Switched to posture: learn");
+    expect(harness.newSessionCalls).toHaveLength(0);
+  });
+
+  it("command posture switch in an active conversation creates a compacted replacement session", async () => {
+    const branch = [
+      {
+        type: "message",
+        id: "old-kept-entry",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "previous work" }],
+          timestamp: 100,
+        },
+      },
+    ];
+    const harness = fakeExtension(cwd, {
+      branch,
+      compactResult: {
+        summary: "handoff summary",
+        firstKeptEntryId: "old-kept-entry",
+        tokensBefore: 456,
+        details: { readFiles: ["src/index.ts"], modifiedFiles: [] },
+      },
+    });
+
+    await harness.run("learn");
+
+    expect(harness.compactCalls).toEqual([
+      { customInstructions: expect.stringContaining("Switching posture to learn") },
+    ]);
+    expect(harness.newSessionCalls).toHaveLength(1);
+    expect(harness.newSessionCalls[0].parentSession).toBe("/tmp/current-session.jsonl");
+    expect(harness.replacementEntries).toContainEqual({
+      type: "custom_message",
+      customType: "pi-posture-handoff-summary",
+      content: "Compacted summary from previous session:\n\nhandoff summary",
+      display: true,
+      details: {
+        firstKeptEntryId: "old-kept-entry",
+        tokensBefore: 456,
+        details: { readFiles: ["src/index.ts"], modifiedFiles: [] },
+      },
+    });
+    expect(harness.replacementEntries).toContainEqual({
+      type: "message",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "previous work" }],
+        timestamp: 100,
+      },
+    });
+    expect(harness.replacementEntries).toContainEqual({
+      type: "custom",
+      customType: "posture",
+      data: expect.objectContaining({ id: "learn" }),
+    });
+    expect(harness.replacementEntries).toContainEqual({
+      type: "custom",
+      customType: "pi-posture-prompt-mode",
+      data: { mode: "overlay" },
+    });
+    expect(harness.replacementEntries).toContainEqual({
+      type: "custom",
+      customType: "pi-posture-state",
+      data: expect.objectContaining({ states: expect.objectContaining({ learn: expect.any(Object) }) }),
+    });
+    expect(harness.replacementReloadCalls).toEqual(["reload"]);
+  });
+
+  it("UI picker posture switch in an active conversation creates a compacted replacement session", async () => {
+    const harness = fakeExtension(cwd, {
+      hasUI: true,
+      selectChoice: "learn — Tutor posture for learning while still using the full toolset for accurate guidance.",
+      branch: [
+        {
+          type: "message",
+          id: "old-kept-entry",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "picker previous work" }],
+            timestamp: 100,
+          },
+        },
+      ],
+      compactResult: {
+        summary: "picker handoff summary",
+        firstKeptEntryId: "old-kept-entry",
+        tokensBefore: 456,
+      },
+    });
+
+    await harness.run("");
+
+    expect(harness.selectCalls).toHaveLength(1);
+    expect(harness.compactCalls).toHaveLength(1);
+    expect(harness.newSessionCalls).toHaveLength(1);
+    expect(harness.replacementEntries).toContainEqual({
+      type: "message",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "picker previous work" }],
+        timestamp: 100,
+      },
+    });
+  });
+
+  it("prompt-mode command persists replacement mode and before_agent_start returns a replacement prompt", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("prompt-mode replace");
+    await harness.run("learn");
+    const results = await harness.emit("before_agent_start", {
+      type: "before_agent_start",
+      prompt: "hello",
+      images: undefined,
+      systemPrompt: `BASE PI HARNESS PROMPT\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext("/repo/AGENTS.md", "PROJECT RULES")}</project_context>`,
+      systemPromptOptions: {
+        cwd,
+        selectedTools: ["read", "bash"],
+        toolSnippets: { read: "Read files", bash: "Run shell commands" },
+      },
+    });
+
+    const result = results.find((entry): entry is { systemPrompt: string } => Boolean(entry && "systemPrompt" in entry));
+    expect(harness.appended).toContainEqual({ customType: "pi-posture-prompt-mode", data: { mode: "replace" } });
+    expect(result?.systemPrompt).toContain('Active posture: learn');
+    expect(result?.systemPrompt).toContain("Tutor posture for learning");
+    expect(result?.systemPrompt).toContain("Available tools:");
+    expect(result?.systemPrompt).toContain("PROJECT RULES");
+    expect(result?.systemPrompt).toContain(`Current working directory: ${cwd}`);
+    expect(result?.systemPrompt).not.toContain("BASE PI HARNESS PROMPT");
+  });
+
+  it("restores prompt mode from config and session state", async () => {
+    writeProjectConfig(cwd, { promptMode: "replace" });
+    const configHarness = fakeExtension(cwd);
+    await configHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(__testing.runtimeState.promptMode).toBe("replace");
+
+    writeProjectConfig(cwd, { promptMode: "overlay" });
+    const branch = [{ type: "custom", customType: "pi-posture-prompt-mode", data: { mode: "replace" } }];
+    const sessionHarness = fakeExtension(cwd, { branch });
+    await sessionHarness.emit("session_start", { type: "session_start", reason: "startup" });
+    expect(__testing.runtimeState.promptMode).toBe("replace");
   });
 
   it("startup picker cancel or unknown selection leaves posture unchanged", async () => {

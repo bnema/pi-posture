@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { isRecord } from "./posture-registry.js";
 
-import type { PostureRuntimeState, ThinkingLevel } from "./posture-registry.js";
+import type { PostureRuntimeState, PromptMode, ThinkingLevel } from "./posture-registry.js";
 
 export type ContextFilterReport = {
   kept: string[];
@@ -11,6 +11,7 @@ export type ContextFilterReport = {
 
 export type RuntimeState = {
   activePostureId: string;
+  promptMode: PromptMode;
   contextFilterReport?: ContextFilterReport;
   toolSnapshot?: string[];
   appliedToolsOverride?: string[];
@@ -20,6 +21,7 @@ export type RuntimeState = {
 
 export const runtimeState: RuntimeState = {
   activePostureId: "default",
+  promptMode: "overlay",
 };
 
 export const postureRuntimeStates: Map<string, PostureRuntimeState> = new Map();
