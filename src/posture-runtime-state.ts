@@ -46,19 +46,24 @@ export function persistPostureRuntimeState(pi: ExtensionAPI): void {
 export function restorePostureRuntimeState(ctx: ExtensionContext): void {
   postureRuntimeStates.clear();
   const branch = ctx.sessionManager.getBranch();
-  let latestEntry: (typeof branch)[number] | undefined;
+  let states: Record<string, unknown> | undefined;
+
   for (let index = branch.length - 1; index >= 0; index--) {
     const entry = branch[index];
-    if (entry.type === "custom" && entry.customType === "pi-posture-state") {
-      latestEntry = entry;
-      break;
+    if (entry.type !== "custom" || entry.customType !== "pi-posture-state") {
+      continue;
     }
-  }
-  if (!latestEntry) return;
 
-  const data = (latestEntry as { data?: unknown }).data as Record<string, unknown> | undefined;
-  const states = data?.states;
-  if (!isRecord(states)) return;
+    const data = (entry as { data?: unknown }).data;
+    if (!isRecord(data) || !isRecord(data.states)) {
+      continue;
+    }
+
+    states = data.states;
+    break;
+  }
+
+  if (!states) return;
 
   for (const [id, rawState] of Object.entries(states)) {
     const sanitized = sanitizePostureRuntimeState(rawState);

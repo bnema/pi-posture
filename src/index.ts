@@ -499,26 +499,26 @@ function formatReplacementContext(
   options?: BuildSystemPromptOptions,
   baseSystemPrompt?: string,
 ): string | undefined {
-  const contextFiles = options?.contextFiles ?? [];
-  if (contextFiles.length > 0) {
-    const kept = contextFiles.filter(
-      (file) => !shouldSuppressContext(file.path, posture.contextPolicy ?? {}),
-    );
-    if (kept.length === 0) return undefined;
-    return [
-      "<project_context>",
-      "Project-specific instructions and guidelines:",
-      "",
-      ...kept.map(
-        (file) => `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
-      ),
-      "</project_context>",
-    ].join("\n");
+  if (baseSystemPrompt !== undefined) {
+    const filtered = filterProjectContext(baseSystemPrompt, posture.contextPolicy, options);
+    return filtered.match(PROJECT_CONTEXT_PATTERN)?.[0]?.trimEnd();
   }
 
-  if (!baseSystemPrompt) return undefined;
-  const filtered = filterProjectContext(baseSystemPrompt, posture.contextPolicy, options);
-  return filtered.match(PROJECT_CONTEXT_PATTERN)?.[0]?.trimEnd();
+  const contextFiles = options?.contextFiles ?? [];
+  if (contextFiles.length === 0) return undefined;
+  const kept = contextFiles.filter(
+    (file) => !shouldSuppressContext(file.path, posture.contextPolicy ?? {}),
+  );
+  if (kept.length === 0) return undefined;
+  return [
+    "<project_context>",
+    "Project-specific instructions and guidelines:",
+    "",
+    ...kept.map(
+      (file) => `<project_instructions path="${file.path}">\n${file.content}\n</project_instructions>`,
+    ),
+    "</project_context>",
+  ].join("\n");
 }
 
 function buildReplacementPrompt(
@@ -1188,6 +1188,7 @@ export default function piPosture(pi: ExtensionAPI) {
 
     let systemPrompt = event.systemPrompt;
     if (runtimeState.promptMode === "replace") {
+      if (posture.id === "default" && !dynamicGuidance) return undefined;
       systemPrompt = buildReplacementPrompt(posture, event.systemPromptOptions, dynamicGuidance, event.systemPrompt);
     } else {
       // Existing overlay behavior

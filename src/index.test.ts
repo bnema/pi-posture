@@ -225,6 +225,33 @@ describe("pi-posture internals", () => {
     expect(__testing.inspectText()).toContain("project config.postures.broken.thinking: invalid thinking level");
   });
 
+  it("reports non-array activeTools config values", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        limited: { description: "Limited", activeTools: "read" },
+      },
+    });
+
+    __testing.loadPostures(cwd);
+
+    expect(__testing.inspectText()).toContain("project config.postures.limited.activeTools: must be an array");
+  });
+
+  it("reports invalid activeTools array entries while keeping valid tool names", () => {
+    writeProjectConfig(cwd, {
+      postures: {
+        limited: { description: "Limited", activeTools: ["read", " ", 42, "bash"] },
+      },
+    });
+
+    __testing.loadPostures(cwd);
+    __testing.runtimeState.activePostureId = "limited";
+
+    expect(__testing.activePosture().activeTools).toEqual(["read", "bash"]);
+    expect(__testing.inspectText()).toContain("project config.postures.limited.activeTools.1: must be a non-empty string");
+    expect(__testing.inspectText()).toContain("project config.postures.limited.activeTools.2: must be a non-empty string");
+  });
+
   it("adds prompt overlays for non-default postures but not default", () => {
     __testing.runtimeState.activePostureId = "learn";
     const learnPrompt = __testing.addPromptOverlay("base", __testing.activePosture());
@@ -363,6 +390,68 @@ describe("pi-posture internals", () => {
     expect(filtered).toContain(projectContext(projectPath, "project-one"));
     expect(filtered).toContain(projectContext(projectPath, "project-two"));
     expect(__testing.runtimeState.contextFilterReport).toEqual({ kept: [projectPath, projectPath], suppressed: [globalPath] });
+  });
+
+  it("replace prompt mode leaves the default posture system prompt untouched", async () => {
+    const harness = fakeExtension(cwd);
+
+    await harness.run("prompt-mode replace");
+    const results = await harness.emit("before_agent_start", {
+      type: "before_agent_start",
+      prompt: "hello",
+      systemPrompt: "BASE",
+      systemPromptOptions: { cwd },
+    });
+
+    expect(results).toEqual([undefined]);
+  });
+
+  it("replacement prompt uses no metadata context when rendered system prompt is empty", async () => {
+    const absentPath = join(cwd, "absent/AGENTS.md");
+    const harness = fakeExtension(cwd);
+
+    await harness.run("prompt-mode replace");
+    await harness.run("learn");
+    const results = await harness.emit("before_agent_start", {
+      type: "before_agent_start",
+      prompt: "hello",
+      systemPrompt: "",
+      systemPromptOptions: {
+        cwd,
+        contextFiles: [{ path: absentPath, content: "absent rules" }],
+      },
+    });
+
+    const result = results.find((entry): entry is { systemPrompt: string } => Boolean(entry && "systemPrompt" in entry));
+    expect(result?.systemPrompt).not.toContain("<project_context>");
+    expect(result?.systemPrompt).not.toContain(absentPath);
+    expect(result?.systemPrompt).not.toContain("absent rules");
+  });
+
+  it("replacement prompt uses only rendered project context entries", async () => {
+    const renderedPath = join(cwd, "rendered/AGENTS.md");
+    const absentPath = join(cwd, "absent/AGENTS.md");
+    const harness = fakeExtension(cwd);
+
+    await harness.run("prompt-mode replace");
+    await harness.run("learn");
+    const results = await harness.emit("before_agent_start", {
+      type: "before_agent_start",
+      prompt: "hello",
+      systemPrompt: `<project_context>\n\nProject-specific instructions and guidelines:\n\n${projectContext(renderedPath, "rendered rules")}</project_context>\nBASE`,
+      systemPromptOptions: {
+        cwd,
+        contextFiles: [
+          { path: renderedPath, content: "rendered rules" },
+          { path: absentPath, content: "absent rules" },
+        ],
+      },
+    });
+
+    const result = results.find((entry): entry is { systemPrompt: string } => Boolean(entry && "systemPrompt" in entry));
+    expect(result?.systemPrompt).toContain(projectContext(renderedPath, "rendered rules").trimEnd());
+    expect(result?.systemPrompt).not.toContain(absentPath);
+    expect(result?.systemPrompt).not.toContain("absent rules");
   });
 
   it("passes systemPromptOptions contextFiles through before_agent_start", async () => {
@@ -894,6 +983,24 @@ describe("pi-posture internals", () => {
     const state = __testing.getOrCreatePostureRuntimeState("orchestrator");
     expect(state.activationCount).toBe(5);
     expect(state.lastActivatedAt).toBe(500);
+  });
+
+  it("falls back to newest well-formed runtime state snapshot when latest snapshot is malformed", () => {
+    const branch = [
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: { states: { orchestrator: { activationCount: 7, lastActivatedAt: 700 } } },
+      },
+      {
+        type: "custom",
+        customType: "pi-posture-state",
+        data: { states: null },
+      },
+    ];
+    const ctx = { sessionManager: { getBranch: () => branch } } as any;
+    __testing.restorePostureRuntimeState(ctx);
+    expect(__testing.getOrCreatePostureRuntimeState("orchestrator")).toEqual({ activationCount: 7, lastActivatedAt: 700 });
   });
 
   it("latest empty runtime state entry clears earlier states", () => {

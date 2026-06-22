@@ -617,12 +617,21 @@ export function buildPostureRegistry(
             }
           }
 
-          const activeTools = Array.isArray(entry.activeTools)
-            ? entry.activeTools.filter(
-                (tool): tool is string =>
-                  typeof tool === "string" && tool.trim().length > 0,
-              )
-            : existing?.activeTools;
+          let activeTools = existing?.activeTools;
+          if (entry.activeTools !== undefined) {
+            if (!Array.isArray(entry.activeTools)) {
+              addErr(`${source}.postures.${rawId}.activeTools: must be an array`);
+            } else {
+              activeTools = [];
+              entry.activeTools.forEach((tool, index) => {
+                if (typeof tool !== "string" || tool.trim().length === 0) {
+                  addErr(`${source}.postures.${rawId}.activeTools.${index}: must be a non-empty string`);
+                  return;
+                }
+                activeTools?.push(tool.trim());
+              });
+            }
+          }
 
           let thinking = existing?.thinking;
           if (entry.thinking !== undefined) {
